@@ -1,0 +1,53 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <link rel="stylesheet" href="popup.css">
+</head>
+<body>
+  <header>
+    <div class="title"><span class="dot"></span> Growth Hack GS</div>
+    <div id="sheetInfo" class="muted"></div>
+  </header>
+
+  <section id="sheetInputWrap">
+    <label for="sheetId">Google Sheet URL or ID</label>
+    <div class="row">
+      <input id="sheetId" type="text" placeholder="https://docs.google.com/spreadsheets/d/...">
+      <button id="loadBtn" class="btn">Load</button>
+    </div>
+  </section>
+
+  <section id="loginWrap">
+    <label for="loginEmail">Screener login (needed for Results / Full-text search)</label>
+    <input id="loginEmail" type="email" placeholder="screener email" autocomplete="username">
+    <input id="loginPass" type="password" placeholder="screener password" autocomplete="current-password" style="width:100%;margin-top:6px">
+    <div class="row between" style="margin-top:8px">
+      <label class="chk" style="margin:0"><input type="checkbox" id="rememberChk"> Remember</label>
+      <button id="loginBtn" class="btn primary">Login to Screener</button>
+    </div>
+    <div class="muted" id="loginState">Checking login…</div>
+  </section>
+
+  <section id="controls" hidden>
+    <div class="row between">
+      <label class="chk"><input type="checkbox" id="appendChk"> Append (keep existing rows)</label>
+      <label class="chk"><input type="checkbox" id="replaceChk" checked> Replace tab</label>
+    </div>
+    <div class="row between">
+      <label>Pages (0=all): <input type="number" id="maxPages" value="0" min="0" max="500" style="width:64px"></label>
+      <div class="row">
+        <button id="scrapeAllBtn" class="btn primary" disabled>Scrape All</button>
+      </div>
+    </div>
+  </section>
+
+  <section id="itemsWrap" hidden>
+    <div class="items"></div>
+  </section>
+
+  <section id="log" hidden></section>
+
+  <script src="popup.js"></script>
+</body>
+</html>

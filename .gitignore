@@ -1,0 +1,16 @@
+# Secrets
+extension/service_account.json
+service_account.json
+
+# Scratch
+.scratch/
+
+# Node
+node_modules/
+
+# Logs
+*.log
+
+# OS
+Thumbs.db
+.DS_Store
