@@ -895,10 +895,8 @@ async function scrapePaged(url, maxPages, onPage, onBatch) {
         // Classic Screener screens (Undervalued, High Growth, …) declare neither a Link
         // nor a Score column, so guarantee both are always present (Link last-free url).
         let scoreIdx = headers.findIndex((h) => /score/i.test(normCellKey(h)));
-        let confIdx = headers.findIndex((h) => /data con/i.test(normCellKey(h)));
         if (linkIdx < 0) { headers.push("Link"); linkIdx = headers.length - 1; }
         if (scoreIdx < 0) { headers.push("Score (0-100)"); scoreIdx = headers.length - 1; }
-        if (confIdx < 0) { headers.push("Data Conf %"); confIdx = headers.length - 1; }
         for (const r of main.rows) {
           const cells = (r.arrows || []).slice();
           const sig = cells.slice(0, Math.max(normKeys.length, 2)).map((c) => normCellKey(c)).join("|");
@@ -908,9 +906,7 @@ async function scrapePaged(url, maxPages, onPage, onBatch) {
           // Company URL lives in the Company column — grab it from that cell's own link.
           const rowHref = r.links && r.links.length ? r.links[companyIdx] || r.links.find(Boolean) || r.href : r.href;
           values[linkIdx] = makeAbsolute(current, rowHref) || values[linkIdx];
-          const scored = computeScore100(headers, values);
-          values[scoreIdx] = scored.score;
-          values[confIdx] = scored.confidence;
+          values[scoreIdx] = computeScore100(headers, values).score;
           pageRows.push({ url: makeAbsolute(current, rowHref), values });
         }
       }
