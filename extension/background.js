@@ -418,13 +418,15 @@ async function fetchDetail(url) {
   return { html: pub, source: "public" };
 }
 
-function resolveNextPagination(html, currentUrl) {
+function resolveNextPagination(html, currentUrl, page) {
   const nav = decodeAmp(html).match(/class="pagination"[\s\S]*?<\/div>/i);
   if (!nav) return null;
   for (const m of nav[0].matchAll(/href="([^"]*?[?&](?:p|page)=(\d+))"/gi)) {
-    // Only treat it as "next" if it actually advances the page (1 → 2 …); ignore
-    // the paginator's own "1" link so we never loop back to the first page.
-    if (parseInt(m[2], 10) <= 1) continue;
+    const n = parseInt(m[2], 10);
+    // Only treat it as "next" if it actually advances past the current page
+    // (e.g. 2→3, 3→4); ignore "1", the current page, and Prev links so we
+    // never bounce back to an earlier page.
+    if (n <= page) continue;
     const next = makeAbsolute(currentUrl, m[1]);
     if (next.split("#")[0] === currentUrl.split("#")[0]) continue;
     return next;
@@ -540,15 +542,24 @@ function scorePE(v) {
   return 2;
 }
 
-function scoreProfitGrowth(v) {
+function scoreProfitGrowth(v, qoq) {
   const x = toNum(v);
   if (!isFinite(x)) return 0;
-  if (x > 75) return 15;
-  if (x > 40) return 13;
-  if (x > 20) return 11;
-  if (x > 10) return 8;
-  if (x > 0) return 5;
-  return 0;
+  let pts;
+  if (x > 75) pts = 15;
+  else if (x > 40) pts = 13;
+  else if (x > 20) pts = 11;
+  else if (x > 10) pts = 8;
+  else if (x > 0) pts = 5;
+  else pts = 0;
+  // Anti-manipulation: huge YoY profit growth that is collapsing in the latest
+  // quarter is usually one-off / base-effect, not durable momentum.
+  const q = toNum(qoq);
+  if (isFinite(q)) {
+    if (q <= -50) pts = Math.min(pts, 5);
+    else if (q <= -20) pts = Math.min(pts, 8);
+  }
+  return pts;
 }
 
 function scoreSalesGrowth(v) {
@@ -573,14 +584,16 @@ function scoreROCE(v) {
   return 15;
 }
 
-function scoreOPM(v) {
+function scoreOPM(v, sales) {
   const x = toNum(v);
   if (!isFinite(x) || x <= 0) return 0;
-  if (x <= 5) return 3;
-  if (x <= 10) return 5;
-  if (x <= 20) return 7;
-  if (x <= 30) return 9;
-  return 10;
+  const s = toNum(sales);
+  // Anomaly guard: OPM way above 100% on a tiny sales base is data distortion
+  // (e.g. Shri Niwas: ₹1.47Cr sales, 736% OPM) → never hand it max points.
+  const anomalous = x > 100 && isFinite(s) && s > 0 && s < 5;
+  let pts = x <= 5 ? 3 : x <= 10 ? 5 : x <= 20 ? 7 : x <= 30 ? 9 : 10;
+  if (anomalous) pts = Math.min(pts, 3);
+  return pts;
 }
 
 function scoreDebt(debt, sales) {
@@ -622,6 +635,7 @@ function scoreQoQ(v) {
   if (x > 30) return 4;
   if (x > 10) return 3;
   if (x > 0) return 2;
+  if (x > -20) return 1;
   return 0;
 }
 
@@ -653,38 +667,93 @@ function computeScore100(headers, cells) {
   const qoq = get(/qtr.*profit|profit.*var/i);
   const yr1 = get(/1yr|return/i);
 
-  let total =
+  let base =
     scorePE(pe) +
-    scoreProfitGrowth(pg) +
+    scoreProfitGrowth(pg, qoq) +
     scoreSalesGrowth(sg) +
     scoreROCE(roce) +
-    scoreOPM(opm) +
+    scoreOPM(opm, sales) +
     scoreDebt(debt, sales) +
     scorePromoter(prom) +
     scorePromoterChange(promChg) +
     scoreQoQ(qoq) +
     score1Y(yr1);
 
-  // Risk adjustment on available fields.
+  // ── Red-flag penalties (max -20, avoid double-count with the base bands) ──
+  let penalty = 0;
   const pv = toNum(pe);
-  if (isFinite(pv)) {
-    if (pv > 100) total -= 4;
-    else if (pv > 50) total -= 2;
-    if (pv <= 0) total -= 5;
-  }
   const pgv = toNum(pg);
-  if (isFinite(pgv) && pgv < 0) total -= 2;
   const sgv = toNum(sg);
-  if (isFinite(pgv) && isFinite(sgv) && pgv > 60 && sgv > 0 && sgv < pgv / 2) total -= 4;
-  const cur = idx(/eqshares/);
-  const prev = idx(/sharespyr/);
-  if (cur >= 0 && prev >= 0) {
-    const c = toNum(cells[cur]);
-    const p = toNum(cells[prev]);
-    if (isFinite(c) && isFinite(p) && p > 0 && c > p * 1.02) total -= 3;
+  const qv = toNum(qoq);
+  const dv = toNum(debt);
+  const sv = toNum(sales);
+  const opmv = toNum(opm);
+  const curt = toNum(get(/eqshares/));
+  const prevt = toNum(get(/sharespyr/));
+
+  // Extreme / loss-making P/E: cheap is already rewarded inside scorePE; here we
+  // only punish nonsense valuations (PE>100 or negative earnings).
+  if (isFinite(pv) && pv > 100) penalty += 4;
+  else if (isFinite(pv) && pv <= 0) penalty += 4;
+  else if (isFinite(pv) && pv > 50) penalty += 2;
+
+  // Severe profit collapse: QoQ falling hard while the latest quarter is red.
+  if (isFinite(qv)) {
+    if (qv <= -75) penalty += 5;
+    else if (qv <= -50) penalty += 4;
+    else if (qv <= -20) penalty += 2;
   }
 
-  return Math.max(0, Math.min(100, Math.round(total)));
+  // Extreme debt relative to sales (₹1,164 Cr debt vs ₹1.47 Cr sales → flag).
+  if (isFinite(dv) && isFinite(sv) && dv > 0 && sv > 0) {
+    const debtSales = (dv / sv) * 100;
+    if (debtSales > 1000) penalty += 5;
+    else if (debtSales > 200) penalty += 4;
+    else if (debtSales > 100) penalty += 2;
+  }
+
+  // Abnormal margin: OPM impossibly high on a tiny base.
+  if (isFinite(opmv) && opmv > 100 && isFinite(sv) && sv > 0 && sv < 5) penalty += 4;
+
+  // Growth-quality divergence: profit exploding while sales barely move.
+  if (isFinite(pgv) && isFinite(sgv) && pgv > 60 && sgv > 0 && sgv < pgv / 2) penalty += 3;
+
+  // Major dilution: outstanding shares up significantly vs previous year.
+  if (isFinite(curt) && isFinite(prevt) && prevt > 0) {
+    const growth = curt / prevt;
+    if (growth > 1.5) penalty += 4;
+    else if (growth > 1.1) penalty += 2;
+  }
+
+  let total = base - Math.min(penalty, 20);
+  total = Math.round(total);
+  return {
+    score: Math.max(0, Math.min(100, total)),
+    confidence: computeDataConfidence(headers, cells),
+  };
+}
+
+// Data confidence: share of the fundamental fields that carry a real value.
+function computeDataConfidence(headers, cells) {
+  const needed = [
+    /^pe$/i,
+    /profit.*growth|growth.*profit/i,
+    /sales.*growth|growth.*sales/i,
+    /roce/i,
+    /opm/i,
+    /^debt/i,
+    /^salesrscr|sales.*(?!qtr)cr/i,
+    /prom.*hold|hold.*prom/i,
+    /change.*prom/i,
+    /qtr.*profit|profit.*var/i,
+    /1yr|return/i,
+  ];
+  let present = 0;
+  for (const re of needed) {
+    const i = headers.findIndex((h) => re.test(normCellKey(h)));
+    if (i >= 0 && String(cells[i] || "").trim() !== "") present++;
+  }
+  return Math.round((present / needed.length) * 100);
 }
 
 // Latest-quarter results: one row per company instead of one row per metric.
@@ -826,8 +895,10 @@ async function scrapePaged(url, maxPages, onPage, onBatch) {
         // Classic Screener screens (Undervalued, High Growth, …) declare neither a Link
         // nor a Score column, so guarantee both are always present (Link last-free url).
         let scoreIdx = headers.findIndex((h) => /score/i.test(normCellKey(h)));
+        let confIdx = headers.findIndex((h) => /data con/i.test(normCellKey(h)));
         if (linkIdx < 0) { headers.push("Link"); linkIdx = headers.length - 1; }
         if (scoreIdx < 0) { headers.push("Score (0-100)"); scoreIdx = headers.length - 1; }
+        if (confIdx < 0) { headers.push("Data Conf %"); confIdx = headers.length - 1; }
         for (const r of main.rows) {
           const cells = (r.arrows || []).slice();
           const sig = cells.slice(0, Math.max(normKeys.length, 2)).map((c) => normCellKey(c)).join("|");
@@ -837,7 +908,9 @@ async function scrapePaged(url, maxPages, onPage, onBatch) {
           // Company URL lives in the Company column — grab it from that cell's own link.
           const rowHref = r.links && r.links.length ? r.links[companyIdx] || r.links.find(Boolean) || r.href : r.href;
           values[linkIdx] = makeAbsolute(current, rowHref) || values[linkIdx];
-          values[scoreIdx] = computeScore100(headers, values);
+          const scored = computeScore100(headers, values);
+          values[scoreIdx] = scored.score;
+          values[confIdx] = scored.confidence;
           pageRows.push({ url: makeAbsolute(current, rowHref), values });
         }
       }
@@ -861,7 +934,7 @@ async function scrapePaged(url, maxPages, onPage, onBatch) {
     // Prefer the numbered paginator (results page), else the Next-link layout.
     let next = pag
       ? resolvePaginatorNext(html, current, page)
-      : resolveNextPagination(html, current);
+      : resolveNextPagination(html, current, page);
     // Raw screens whose paginator links aren't wrapped in the known divs: scan
     // the whole page for any numbered page anchor (?page=N / ?p=N) beyond this.
     if (!next) next = resolveNextFromAnyAnchor(html, current, page);
