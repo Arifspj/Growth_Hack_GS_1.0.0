@@ -458,6 +458,38 @@ function resolvePaginatorNext(html, currentUrl, page) {
   return best ? makeAbsolute(currentUrl, best.href) : null;
 }
 
+// Some Screener raw screens (Undervalued, etc.) render a paginator whose
+// numbered links sit outside class="paginator"/class="pagination", or use
+// ?page=N instead of ?p=N. Scan the entire document so no next page is missed.
+function listPageNumbers(html) {
+  const nums = [];
+  for (const m of html.matchAll(/[?&](?:p|page)=(\d+)/g)) nums.push(parseInt(m[1], 10));
+  return nums;
+}
+
+function listPageHrefs(html) {
+  const out = [];
+  for (const m of html.matchAll(/href="([^"]*?[?&](?:p|page)=(\d+))"/gi)) {
+    out.push({ href: m[1], n: parseInt(m[2], 10) });
+  }
+  return out;
+}
+
+function resolveNextFromAnyAnchor(html, currentUrl, page) {
+  let best = null;
+  for (const p of listPageHrefs(html)) {
+    if (p.n > page && (!best || p.n < best.n)) best = p;
+  }
+  return best ? makeAbsolute(currentUrl, best.href) : null;
+}
+
+function buildPageUrl(currentUrl, n) {
+  if (/[?&](?:p|page)=\d+/.test(currentUrl)) {
+    return currentUrl.replace(/([?&])(?:p|page)=\d+/, `$1page=${n}`);
+  }
+  return currentUrl + (currentUrl.includes("?") ? "&" : "?") + `page=${n}`;
+}
+
 // Simple 0-100 scoring for results rows (bands on YoY growth + current margin).
 function bandScore(pct) {
   if (pct == null || String(pct).trim() === "") return 0;
@@ -479,6 +511,174 @@ function marginScore(netProfit, sales) {
   if (margin >= 0.05) return 10;
   if (margin > 0) return 5;
   return 0;
+}
+
+// ── 100-point scoring (Undervalued / classic Screener screens) ──────────────
+// Valuation 20 · Profit growth 15 · Sales growth 10 · ROCE 15 · OPM 10 ·
+// Debt 10 · Promoter 5 · Promoter change 5 · QoQ profit 5 · 1Y return 5.
+function toNum(v) {
+  if (v == null || String(v).trim() === "") return NaN;
+  const s = String(v).replace(/[,%]/g, "").trim();
+  return s === "" ? NaN : parseFloat(s);
+}
+
+function scorePE(v) {
+  const x = toNum(v);
+  if (!isFinite(x) || x <= 0) return 2;
+  if (x <= 8) return 20;
+  if (x <= 12) return 18;
+  if (x <= 16) return 16;
+  if (x <= 20) return 14;
+  if (x <= 30) return 10;
+  if (x <= 50) return 6;
+  return 2;
+}
+
+function scoreProfitGrowth(v) {
+  const x = toNum(v);
+  if (!isFinite(x)) return 0;
+  if (x > 75) return 15;
+  if (x > 40) return 13;
+  if (x > 20) return 11;
+  if (x > 10) return 8;
+  if (x > 0) return 5;
+  return 0;
+}
+
+function scoreSalesGrowth(v) {
+  const x = toNum(v);
+  if (!isFinite(x)) return 0;
+  if (x > 75) return 10;
+  if (x > 40) return 9;
+  if (x > 20) return 7;
+  if (x > 10) return 5;
+  if (x > 0) return 3;
+  return 0;
+}
+
+function scoreROCE(v) {
+  const x = toNum(v);
+  if (!isFinite(x)) return 2;
+  if (x < 10) return 2;
+  if (x < 15) return 5;
+  if (x < 20) return 8;
+  if (x < 30) return 10;
+  if (x < 50) return 13;
+  return 15;
+}
+
+function scoreOPM(v) {
+  const x = toNum(v);
+  if (!isFinite(x) || x <= 0) return 0;
+  if (x <= 5) return 3;
+  if (x <= 10) return 5;
+  if (x <= 20) return 7;
+  if (x <= 30) return 9;
+  return 10;
+}
+
+function scoreDebt(debt, sales) {
+  const d = toNum(debt);
+  const s = toNum(sales);
+  if (!isFinite(d) || d <= 0) return 10;
+  if (!isFinite(s) || s <= 0) return 2;
+  const ratio = (d / s) * 100;
+  if (ratio <= 0) return 10;
+  if (ratio <= 5) return 9;
+  if (ratio <= 10) return 8;
+  if (ratio <= 20) return 6;
+  if (ratio <= 40) return 4;
+  if (ratio <= 60) return 2;
+  return 0;
+}
+
+function scorePromoter(v) {
+  const x = toNum(v);
+  if (!isFinite(x)) return 1;
+  if (x < 20) return 1;
+  if (x < 40) return 3;
+  if (x < 60) return 4;
+  return 5;
+}
+
+function scorePromoterChange(v) {
+  const x = toNum(v);
+  if (!isFinite(x) || x === 0) return 3;
+  if (x < 0) return 0;
+  if (x <= 2) return 4;
+  return 5;
+}
+
+function scoreQoQ(v) {
+  const x = toNum(v);
+  if (!isFinite(x)) return 0;
+  if (x > 60) return 5;
+  if (x > 30) return 4;
+  if (x > 10) return 3;
+  if (x > 0) return 2;
+  return 0;
+}
+
+function score1Y(v) {
+  const x = toNum(v);
+  if (!isFinite(x)) return 0;
+  if (x > 60) return 5;
+  if (x > 30) return 4;
+  if (x > 10) return 3;
+  if (x > 0) return 2;
+  return 0;
+}
+
+function computeScore100(headers, cells) {
+  const idx = (re) => headers.findIndex((h) => re.test(normCellKey(h)));
+  const get = (re) => {
+    const i = idx(re);
+    return i >= 0 ? cells[i] : "";
+  };
+  const pe = get(/^pe$/i);
+  const pg = get(/profit.*growth|growth.*profit/i);
+  const sg = get(/sales.*growth|growth.*sales/i);
+  const roce = get(/roce/i);
+  const opm = get(/opm/i);
+  const debt = get(/^debt/i);
+  const sales = get(/^salesrscr|sales.*(?!qtr)cr/i);
+  const prom = get(/prom.*hold|hold.*prom/i);
+  const promChg = get(/change.*prom/i);
+  const qoq = get(/qtr.*profit|profit.*var/i);
+  const yr1 = get(/1yr|return/i);
+
+  let total =
+    scorePE(pe) +
+    scoreProfitGrowth(pg) +
+    scoreSalesGrowth(sg) +
+    scoreROCE(roce) +
+    scoreOPM(opm) +
+    scoreDebt(debt, sales) +
+    scorePromoter(prom) +
+    scorePromoterChange(promChg) +
+    scoreQoQ(qoq) +
+    score1Y(yr1);
+
+  // Risk adjustment on available fields.
+  const pv = toNum(pe);
+  if (isFinite(pv)) {
+    if (pv > 100) total -= 4;
+    else if (pv > 50) total -= 2;
+    if (pv <= 0) total -= 5;
+  }
+  const pgv = toNum(pg);
+  if (isFinite(pgv) && pgv < 0) total -= 2;
+  const sgv = toNum(sg);
+  if (isFinite(pgv) && isFinite(sgv) && pgv > 60 && sgv > 0 && sgv < pgv / 2) total -= 4;
+  const cur = idx(/eqshares/);
+  const prev = idx(/sharespyr/);
+  if (cur >= 0 && prev >= 0) {
+    const c = toNum(cells[cur]);
+    const p = toNum(cells[prev]);
+    if (isFinite(c) && isFinite(p) && p > 0 && c > p * 1.02) total -= 3;
+  }
+
+  return Math.max(0, Math.min(100, Math.round(total)));
 }
 
 // Latest-quarter results: one row per company instead of one row per metric.
@@ -551,7 +751,7 @@ async function scrapePaged(url, maxPages, onPage, onBatch) {
   let headers = null;
   let allRows = [];
   let current = url;
-  const m = current.match(/[?&]p=(\d+)/);
+  const m = current.match(/[?&](?:p|page)=(\d+)/);
   let page = m ? parseInt(m[1], 10) : 1;
   const wantAll = !maxPages || maxPages <= 0;
   const hardCap = 500;
@@ -569,6 +769,18 @@ async function scrapePaged(url, maxPages, onPage, onBatch) {
     if (pag) {
       totalPages = pag.totalPages;
       totalResults = pag.totalResults;
+    }
+    // Fallback for raw screens whose paginator div isn't recognised: derive the
+    // page count from every numbered page anchor present in the document.
+    if (!totalPages) {
+      const nums = listPageNumbers(html);
+      if (nums.length) {
+        totalPages = Math.max(0, ...nums);
+        if (totalResults == null) {
+          const r = html.match(/([\d,]+)\s*results/i);
+          if (r) totalResults = r[1].replace(/,/g, "");
+        }
+      }
     }
 
     const pageRows = [];
@@ -610,16 +822,6 @@ async function scrapePaged(url, maxPages, onPage, onBatch) {
         let scoreIdx = headers.findIndex((h) => /score/i.test(normCellKey(h)));
         if (linkIdx < 0) { headers.push("Link"); linkIdx = headers.length - 1; }
         if (scoreIdx < 0) { headers.push("Score (0-100)"); scoreIdx = headers.length - 1; }
-        const metricCols = { sales: {}, ebidt: {}, netprofit: {}, eps: {} };
-        for (let i = 0; i < headers.length; i++) {
-          const h = normCellKey(headers[i]);
-          const key = ["sales", "ebidt", "netprofit", "eps"].find(
-            (k) => (k === "eps" ? /^eps$/i.test(h) : h.includes(k))
-          );
-          if (!key) continue;
-          if (/jq$/.test(h) || /latest/.test(h)) metricCols[key].jq = i;
-          else if (/yoy/.test(h) || /growth/.test(h)) metricCols[key].yoy = i;
-        }
         for (const r of main.rows) {
           const cells = (r.arrows || []).slice();
           const sig = cells.slice(0, Math.max(normKeys.length, 2)).map((c) => normCellKey(c)).join("|");
@@ -629,13 +831,7 @@ async function scrapePaged(url, maxPages, onPage, onBatch) {
           // Company URL lives in the Company column — grab it from that cell's own link.
           const rowHref = r.links && r.links.length ? r.links[companyIdx] || r.links.find(Boolean) || r.href : r.href;
           values[linkIdx] = makeAbsolute(current, rowHref) || values[linkIdx];
-          const score =
-            bandScore(values[metricCols.sales.yoy]) +
-            bandScore(values[metricCols.ebidt.yoy]) +
-            bandScore(values[metricCols.netprofit.yoy]) +
-            bandScore(values[metricCols.eps.yoy]) +
-            marginScore(values[metricCols.netprofit.jq], values[metricCols.sales.jq]);
-          values[scoreIdx] = score || "";
+          values[scoreIdx] = computeScore100(headers, values);
           pageRows.push({ url: makeAbsolute(current, rowHref), values });
         }
       }
@@ -660,9 +856,12 @@ async function scrapePaged(url, maxPages, onPage, onBatch) {
     let next = pag
       ? resolvePaginatorNext(html, current, page)
       : resolveNextPagination(html, current);
+    // Raw screens whose paginator links aren't wrapped in the known divs: scan
+    // the whole page for any numbered page anchor (?page=N / ?p=N) beyond this.
+    if (!next) next = resolveNextFromAnyAnchor(html, current, page);
     // Safety net: when total pages are known, walk to the sequentially next page.
-    if (!next && pag && pag.totalPages && page < pag.totalPages) {
-      next = current.replace(/[?&]p=\d+/, `?p=${page + 1}`);
+    if (!next && totalPages && page < totalPages) {
+      next = buildPageUrl(current, page + 1);
     }
     if (!next) break;
     if (next.split("#")[0] === current.split("#")[0]) break;
