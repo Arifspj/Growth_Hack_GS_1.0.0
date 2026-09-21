@@ -37,6 +37,7 @@
     <div class="row between">
       <label>Pages (0=all): <input type="number" id="maxPages" value="0" min="0" max="500" style="width:64px"></label>
       <div class="row">
+        <button id="stopBtn" class="btn" disabled>Stop</button>
         <button id="scrapeAllBtn" class="btn primary" disabled>Scrape All</button>
       </div>
     </div>
@@ -47,6 +48,17 @@
   </section>
 
   <section id="log" hidden></section>
+
+  <div id="modalBackdrop" hidden>
+    <div class="modal" role="dialog" aria-modal="true" aria-labelledby="modalTitle">
+      <h3 id="modalTitle">Replace tab?</h3>
+      <p id="modalMsg">Existing data will be cleared.</p>
+      <div class="modal-actions">
+        <button id="modalCancelBtn" class="btn">Cancel</button>
+        <button id="modalOkBtn" class="btn danger">Replace</button>
+      </div>
+    </div>
+  </div>
 
   <script src="popup.js"></script>
 </body>

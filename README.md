@@ -25,15 +25,28 @@ Tested end-to-end with **Results** → `https://www.screener.in/results/latest/?
     `S.No | Company | Price | M.Cap (Cr) | Sales (JQ) | Sales YoY | EBIDT (JQ) | EBIDT YoY |
     Net Profit (JQ) | Net Profit YoY | EPS (JQ) | EPS YoY | Link | Score (0-100)`.
     S.No is numbered across every scraped page.
-  - The **Score (0-100)** column is an automatic rating: 20 pts each for Sales, EBIDT,
-    Net Profit and EPS YoY bands (≥25% → 20, ≥15% → 15, ≥5% → 10, ≥0% → 5, −10%…0% → 2,
-    worse → 0) plus 20 pts for the current net margin (≥15% → 20, ≥5% → 10, >0 → 5).
-    Rating labels: 80+ Excellent, 60+ Good, 40+ Average, 20+ Weak, else Poor.
+  - The **Score (0-100)** column is an automatic numeric rating: 20 pts each for Sales,
+    EBIDT, Net Profit and EPS YoY bands (≥25% → 20, ≥15% → 15, ≥5% → 10, ≥0% → 5,
+    −10%…0% → 2, worse → 0) plus 20 pts for the current net margin (≥15% → 20,
+    ≥5% → 10, >0 → 5). It is stored as a plain number so Sheets filters/sorts work.
   - Pagination is followed automatically. Both SSRs are supported: the numbered
     **paginator** layout (`1 2 3 … 187 · 4655 results`, used by Results) and the
     **Next**-link layout (listing/search pages). Set **Pages (0=all)** to 0 to walk
     every page in order (Reports show `Page x/187`, total results, and the URL as it
     goes).
+  - **Details** (next to each item, mainly for the *Results* tab): reads the
+    **Link (col M)** of every row, opens the company's `…/consolidated/` page, and
+    appends **31 per-company columns** to the right of **Score**, one row per company:
+    `Mkt Cap (Cr), Current Price, High / Low, Stock P/E, Book Value, Dividend Yield (%),
+    ROCE (%), ROE (%), Face Value, Profit Growth (%), Promoter Holding (%), PEG Ratio,
+    Price to Sales, Net Worth (Cr), ROE 5Yr (%), Profit After Tax (Cr), Sales Growth (%),
+    Debt to Equity, Return 3Yrs (%), Return 5Yrs (%), Earning Power (%),
+    Sales Growth 5Yrs (%), Debt (Cr), Return 1Yr (%), Net Profit (Cr), Price To Book,
+    EPS, ROE 10Yr (%), Sales Var 10Yrs (%), Profit Var 10Yrs (%), Industry PE`.
+    Values come from the page's key-ratios list (your logged-in ratio set), falling back
+    to the annual Ratios / Profit & Loss / Balance Sheet tables and the Promoter-shareholding
+    row. Non-fatal per-company errors are skipped and counted; the header row is added
+    automatically and existing detail columns are refreshed on re-runs.
 - **Login**: the menu has a **Login to Screener** button (email / password / Remember).
   Credentials are stored in `chrome.storage.local` only when *Remember* is checked.
   If credentials are remembered, auto-login happens before each scrape.

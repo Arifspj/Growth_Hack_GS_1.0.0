@@ -18,6 +18,21 @@
         .catch((e) => sendResponse({ error: e.message || String(e) }));
       return true;
     }
+    if (msg.type === "goto") {
+      const target = String(msg.url || "").split("#")[0];
+      if (location.href.split("#")[0] !== target) location.href = target;
+      sendResponse({ ok: true });
+      return false;
+    }
+    if (msg.type === "extract_page") {
+      // Snapshot the fully-rendered page (includes the logged-in custom-ratio list).
+      try {
+        sendResponse({ html: document.documentElement.outerHTML, href: location.href });
+      } catch (e) {
+        sendResponse({ error: e.message || String(e), href: location.href });
+      }
+      return false;
+    }
     if (msg.type === "ping") {
       sendResponse({ ok: true });
       return false;
@@ -94,49 +109,63 @@
   root.innerHTML = `
 <style>
   :host { all: initial; }
-  * { box-sizing: border-box; font-family: -apple-system, "Segoe UI", Roboto, Arial, sans-serif; }
-  .wrap { position: fixed; right: 18px; bottom: 18px; z-index: 2147483647; display: flex; flex-direction: column; align-items: flex-end; gap: 8px; }
-  .fab { width: 46px; height: 46px; border-radius: 50%; background: #2e9353; color: #fff; display: flex; align-items: center; justify-content: center; font-size: 22px; font-weight: 700; cursor: pointer; box-shadow: 0 4px 14px rgba(0,0,0,.35); user-select: none; }
-  .fab:hover { background: #267a45; }
-  .panel { width: 340px; max-height: calc(100vh - 90px); overflow: auto; background: #fff; border: 1px solid #e5e7eb; border-radius: 10px; box-shadow: 0 8px 30px rgba(0,0,0,.28); display: none; font-size: 12px; color: #1f2328; }
-  .panel.open { display: block; }
-  .head { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 10px 12px; border-bottom: 1px solid #f0f1f3; background: #f7f8fa; border-radius: 10px 10px 0 0; }
-  .t { font-weight: 700; font-size: 13px; display: flex; align-items: center; gap: 6px; }
-  .dot { width: 9px; height: 9px; border-radius: 50%; background: #2e9353; display: inline-block; }
-  .winbtn { display: flex; gap: 4px; }
-  .winbtn button { width: 22px; height: 22px; border: 1px solid #d1d5db; border-radius: 5px; background: #fff; cursor: pointer; font-size: 12px; line-height: 1; color: #374151; }
-  .winbtn button:hover { background: #f3f4f6; }
-  .sec { padding: 10px 12px; border-bottom: 1px solid #f0f1f3; }
+  *, *::before, *::after { box-sizing: border-box; font-family: "Google Sans", "Segoe UI", Roboto, Arial, sans-serif; }
+  .wrap { position: fixed; right: 20px; bottom: 20px; z-index: 2147483647; display: flex; flex-direction: column; align-items: flex-end; gap: 12px; font-size: 12.5px; color: #1f2937; }
+  .fab { width: 52px; height: 52px; border-radius: 50%; background: radial-gradient(120% 120% at 20% 15%, #34d399 0%, #10b981 40%, #059669 100%); color: #fff; display: flex; align-items: center; justify-content: center; font-size: 22px; font-weight: 800; cursor: pointer; box-shadow: 0 6px 18px rgba(5, 150, 105, .45), 0 2px 6px rgba(0, 0, 0, .12); user-select: none; border: none; transition: transform .15s ease, box-shadow .15s ease; }
+  .fab:hover { transform: translateY(-2px) scale(1.04); box-shadow: 0 10px 24px rgba(5, 150, 105, .5), 0 3px 8px rgba(0, 0, 0, .15); }
+  .fab:active { transform: scale(.96); }
+  .panel { width: 372px; max-height: calc(100vh - 96px); overflow: auto; background: #fff; border: 1px solid rgba(15, 23, 42, .08); border-radius: 16px; box-shadow: 0 24px 60px rgba(2, 6, 23, .22), 0 8px 24px rgba(2, 6, 23, .12); display: none; color: #1f2937; }
+  .panel.open { display: block; animation: panelIn .18s ease-out; }
+  @keyframes panelIn { from { opacity: 0; transform: translateY(8px) scale(.98); } to { opacity: 1; transform: none; } }
+  .head { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 12px 14px; background: linear-gradient(135deg, #0d8a5f, #067a53); color: #fff; border-radius: 16px 16px 0 0; }
+  .t { font-weight: 700; font-size: 13.5px; display: flex; align-items: center; gap: 8px; letter-spacing: .2px; }
+  .dot { width: 9px; height: 9px; border-radius: 50%; background: #6ee7b7; box-shadow: 0 0 10px rgba(110, 231, 183, .9); display: inline-block; animation: pulse 2.4s infinite; }
+  @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: .4; } }
+  .sheetMeta { opacity: .85; font-weight: 500; }
+  .winbtn { display: flex; gap: 6px; }
+  .winbtn button { width: 26px; height: 26px; border: none; border-radius: 8px; background: rgba(255, 255, 255, .16); color: #fff; cursor: pointer; font-size: 13px; line-height: 1; display: flex; align-items: center; justify-content: center; transition: background .12s ease, transform .12s ease; }
+  .winbtn button:hover { background: rgba(255, 255, 255, .3); transform: scale(1.08); }
+  .sec { padding: 12px 14px; border-bottom: 1px solid #eef1f4; }
   .muted { color: #6b7280; font-size: 11px; }
   .row { display: flex; align-items: center; gap: 8px; }
   .between { justify-content: space-between; }
   .col { flex-direction: column; align-items: stretch; }
-  label { font-weight: 600; font-size: 11px; color: #374151; display: block; margin: 6px 0 4px; }
-  input { padding: 5px 8px; border: 1px solid #d1d5db; border-radius: 6px; font-size: 12px; width: 100%; }
-  input[type=number] { width: 58px; }
-  .chk { display: flex; align-items: center; gap: 4px; font-weight: 400; white-space: nowrap; }
-  .chk input { width: auto; }
-  button.btn { padding: 6px 12px; border: 1px solid #d1d5db; border-radius: 6px; background: #fff; cursor: pointer; font-size: 12px; font-weight: 600; }
-  button.btn:hover:not(:disabled) { background: #f3f4f6; }
-  button.btn.primary { background: #2e9353; border-color: #2e9353; color: #fff; }
-  button.btn.primary:hover:not(:disabled) { background: #267a45; }
-  button.btn:disabled { opacity: .5; cursor: not-allowed; }
-  .list { max-height: 240px; overflow: auto; }
-  .item { display: flex; align-items: center; gap: 8px; padding: 6px 12px; border-bottom: 1px solid #f0f1f3; }
-  .item:last-child { border-bottom: none; }
+  label { font-weight: 600; font-size: 11px; color: #374151; display: block; margin: 8px 0 4px; text-transform: uppercase; letter-spacing: .5px; }
+  input[type=text], input[type=email], input[type=password] { padding: 8px 10px; border: 1.5px solid #e2e8f0; border-radius: 10px; font-size: 12.5px; width: 100%; background: #fbfcfd; transition: border-color .15s, box-shadow .15s, background .15s; font-family: inherit; }
+  input:focus { outline: none; border-color: #10b981; background: #fff; box-shadow: 0 0 0 3px rgba(16, 185, 129, .15); }
+  input[type=number] { width: 64px; padding: 7px 8px; border: 1.5px solid #e2e8f0; border-radius: 9px; font-size: 12.5px; background: #fbfcfd; }
+  .chk { display: flex; align-items: center; gap: 5px; font-weight: 500; white-space: nowrap; font-size: 12px; color: #374151; }
+  .chk input { width: auto; accent-color: #10b981; }
+  .chk label { text-transform: none; letter-spacing: normal; margin: 0; }
+  button.btn { padding: 7px 14px; border: 1px solid #e2e8f0; border-radius: 10px; background: #fff; cursor: pointer; font-size: 12px; font-weight: 600; color: #1f2937; font-family: inherit; transition: background .12s ease, transform .12s ease, box-shadow .12s ease, border-color .12s ease; }
+  button.btn:hover:not(:disabled) { background: #f1f5f9; border-color: #cbd5e1; transform: translateY(-1px); }
+  button.btn:active:not(:disabled) { transform: translateY(0) scale(.97); }
+  button.btn.primary { background: linear-gradient(135deg, #10b981, #059669); border: none; color: #fff; box-shadow: 0 2px 8px rgba(5, 150, 105, .35); }
+  button.btn.primary:hover:not(:disabled) { filter: brightness(1.06); background: linear-gradient(135deg, #10b981, #059669); }
+  button.btn:disabled { opacity: .55; cursor: not-allowed; box-shadow: none; }
+  .seg { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 10px 14px; background: #f6f8fa; border-top: 1px solid #eef1f4; border-bottom: 1px solid #eef1f4; }
+  .list { max-height: 260px; overflow: auto; padding: 6px 0; }
+  .item { display: flex; align-items: center; gap: 8px; padding: 8px 14px; transition: background .12s ease; }
+  .item:hover { background: #f4faf7; }
+  .item + .item { border-top: 1px solid #f1f3f5; }
   .item-label { font-weight: 600; flex: 1; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
   .item button { flex: 0 0 auto; }
-  .status { font-size: 11px; color: #6b7280; max-width: 70px; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
-  .status.done { color: #2e9353; }
-  .status.err { color: #dc2626; }
-  .log { max-height: 110px; overflow: auto; font-family: Consolas, monospace; font-size: 11px; color: #374151; white-space: pre-wrap; margin: 4px 0 0; border-top: 1px dashed #eee; padding-top: 6px; }
+  .item .btn { padding: 5px 10px; font-size: 11.5px; border-radius: 8px; }
+  .status { font-size: 11px; color: #6b7280; max-width: 66px; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; background: #f1f3f5; border-radius: 999px; padding: 2px 8px; text-align: center; }
+  .status.done { background: #e6f7ef; color: #067a53; }
+  .status.err { background: #fdecec; color: #dc2626; }
+  .log { max-height: 130px; overflow: auto; font-family: "Cascadia Code", Consolas, Menlo, monospace; font-size: 10.5px; line-height: 1.5; color: #475569; white-space: pre-wrap; margin: 6px 0 0; background: #fafbfc; border: 1px solid #eef1f4; border-radius: 10px; padding: 8px 10px; }
   .log div { padding: 1px 0; }
-  .empty { color: #9ca3af; font-size: 12px; padding: 10px 12px; }
+  .log .err { color: #dc2626; }
+  .empty { color: #94a3b8; font-size: 12px; padding: 12px 14px; }
+  .list::-webkit-scrollbar, .log::-webkit-scrollbar, .panel::-webkit-scrollbar { width: 8px; height: 8px; }
+  .list::-webkit-scrollbar-thumb, .log::-webkit-scrollbar-thumb { background: #d7dce2; border-radius: 999px; }
+  .list::-webkit-scrollbar-thumb:hover { background: #c3cad2; }
 </style>
 <div class="wrap">
   <div class="panel" id="panel">
     <div class="head">
-      <span class="t"><span class="dot"></span>Growth Hack GS <span class="muted" id="sheetInfo"></span></span>
+      <span class="t"><span class="dot"></span>Growth Hack GS <span class="sheetMeta" id="sheetInfo"></span></span>
       <span class="winbtn">
         <button id="mini" title="Minimize">&#8211;</button>
         <button id="maxi" title="Maximize">&#128470;</button>
@@ -161,9 +190,12 @@
     </div>
     <div class="sec row between">
       <span class="chk"><label style="margin:0 6px 0 0">Pages (0=all):</label><input type="number" id="maxPages" value="0" min="0" max="500"></span>
-      <button class="btn primary" id="scrapeAllBtn" disabled>Scrape All</button>
+      <span class="row" style="gap:6px">
+        <button class="btn" id="stopBtn" disabled>Stop</button>
+        <button class="btn primary" id="scrapeAllBtn" disabled>Scrape All</button>
+      </span>
     </div>
-    <div class="head" style="border-top:1px solid #f0f1f3; border-bottom:1px solid #f0f1f3; background:#f7f8fa; justify-content:flex-start; gap:12px">
+    <div class="seg">
       <span class="chk"><input type="checkbox" id="appendChk"> Append (keep rows)</span>
       <span class="chk"><input type="checkbox" id="replaceChk" checked> Replace tab</span>
     </div>
@@ -242,28 +274,66 @@
       btn.textContent = "Scrape";
       btn.title = `Scrape ${item.url}`;
       btn.addEventListener("click", () => runScrape(item, btn, status, false));
-      row.append(labelSpan, status, btn);
+      const dbtn = document.createElement("button");
+      dbtn.className = "btn";
+      dbtn.textContent = "Details";
+      dbtn.title = "Extract per-row details from each company's consolidated page";
+      dbtn.addEventListener("click", () => runDetails(item, dbtn, status));
+      row.append(labelSpan, status, btn, dbtn);
       box.appendChild(row);
     }
   }
 
-  function chosenMode() {
-    return root.getElementById("replaceChk").checked ? "replace" : "append";
-  }
+function chosenMode() {
+  return root.getElementById("replaceChk").checked ? "replace" : "append";
+}
 
-  function runScrape(item, btn, status, fromAll) {
-    btn.disabled = true;
-    status.className = "status";
-    status.textContent = "starting…";
-    st.port.postMessage({
-      type: "scrape",
-      spreadsheetId: st.spreadsheetId,
-      item,
-      mode: chosenMode(),
-      maxPages: parseInt(root.getElementById("maxPages").value || "1", 10),
-    });
-    void fromAll;
+function pagesFromInput() {
+  const v = parseInt(root.getElementById("maxPages").value, 10);
+  return Number.isFinite(v) && v > 0 ? v : 0;
+}
+
+function runScrape(item, btn, status, fromAll) {
+  const mode = chosenMode();
+  if (mode === "replace" && !window.confirm(`Replace tab "${item.label}"? Existing data will be cleared.`)) {
+    return;
   }
+  btn.disabled = true;
+  updateItemButtons(item.label, true);
+  root.getElementById("stopBtn").disabled = false;
+  status.className = "status";
+  status.textContent = "starting…";
+  st.port.postMessage({
+    type: "scrape",
+    spreadsheetId: st.spreadsheetId,
+    item,
+    mode,
+    maxPages: pagesFromInput(),
+  });
+  void fromAll;
+}
+
+function runDetails(item, btn, status) {
+  if (chosenMode() === "replace" && !window.confirm(`Replace detail columns of "${item.label}"? Existing detail values will be cleared.`)) {
+    return;
+  }
+  btn.disabled = true;
+  updateItemButtons(item.label, true);
+  root.getElementById("stopBtn").disabled = false;
+  status.className = "status";
+  status.textContent = "starting…";
+  st.port.postMessage({
+    type: "scrape_details",
+    spreadsheetId: st.spreadsheetId,
+    item,
+    mode: chosenMode(),
+  });
+}
+
+function updateItemButtons(label, disabled) {
+  const el = itemElByLabel(label);
+  if (el) el.querySelectorAll("button").forEach((b) => (b.disabled = disabled));
+}
 
   function loadSheet(spreadsheetId) {
     if (!spreadsheetId) return log("No Google Sheet URL/ID detected. Paste the sheet URL above.");
@@ -294,19 +364,33 @@
         log(msg.message);
       } else if (msg.type === "complete") {
         const r = msg.result;
-        log(
-          `Done: ${r.written} rows into "${r.tabName}"${r.created ? " (tab created)" : ""}${r.skipped ? ` — ${r.skipped} duplicates skipped` : ""}`
-        );
+        if (r.filled != null) {
+          log(
+            r.stopped
+              ? `Details stopped: ${r.filled}/${r.total} rows filled in "${r.tabName}"`
+              : `Details done: ${r.filled}/${r.total} rows filled in "${r.tabName}"`
+          );
+        } else {
+          log(
+            r.stopped
+              ? `Stopped: ${r.written} rows into "${r.tabName}"`
+              : `Done: ${r.written} rows into "${r.tabName}"${r.created ? " (tab created)" : ""}${r.skipped ? ` — ${r.skipped} duplicates skipped` : ""}`
+          );
+        }
         const el = itemElByLabel(r.tabName);
         if (el) {
           const stEl = el.querySelector(".status");
-          stEl.className = "status done";
-          stEl.textContent = `${r.written} rows ✓`;
-          el.querySelector("button").disabled = false;
+          stEl.className = "status" + (r.stopped ? "" : " done");
+          stEl.textContent = (r.stopped ? "stopped " : "") + (r.filled != null ? `${r.filled} rows` : `${r.written} rows`);
+          el.querySelectorAll("button").forEach((b) => (b.disabled = false));
         }
+        root.getElementById("stopBtn").disabled = true;
+      } else if (msg.type === "stopped") {
+        log("Stop requested — finishing the current row then stopping.");
       } else if (msg.type === "error") {
         log("Error: " + msg.error, "err");
         root.getElementById("items").querySelectorAll(".item button").forEach((b) => (b.disabled = false));
+        root.getElementById("stopBtn").disabled = true;
         const el = itemElByLabel(msg.label);
         if (el) el.querySelector(".status").textContent = "error";
       } else if (msg.type === "login_result") {
@@ -370,7 +454,20 @@
     root.getElementById("appendChk").checked = !e.target.checked;
   });
 
+  root.getElementById("stopBtn").addEventListener("click", () => {
+    root.getElementById("stopBtn").disabled = true;
+    st.port.postMessage({ type: "stop" });
+  });
+
   root.getElementById("scrapeAllBtn").addEventListener("click", async () => {
+    if (
+      chosenMode() === "replace" &&
+      !window.confirm(
+        `Scrape All with Replace will clear existing data in every listed tab (${st.settings.items.map((i) => i.label).join(", ") || "none"}). Continue?`
+      )
+    ) {
+      return;
+    }
     root.getElementById("scrapeAllBtn").disabled = true;
     for (const item of st.settings.items) {
       const el = itemElByLabel(item.label);
@@ -380,7 +477,11 @@
       btn.disabled = true;
       await new Promise((resolve) => {
         const doneCb = (m) => {
-          if ((m.type === "complete" && m.result.tabName === item.label) || m.type === "error") {
+          if (
+            (m.type === "complete" && m.result.tabName === item.label) ||
+            m.type === "error" ||
+            m.type === "stopped"
+          ) {
             st.port.onMessage.removeListener(doneCb);
             resolve();
           }

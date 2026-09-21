@@ -61,7 +61,12 @@ function renderItems() {
     btn.className = "btn primary";
     btn.textContent = "Scrape";
     btn.addEventListener("click", () => runScrape(item, btn, status));
-    row.append(labelSpan, status, btn, urlSpan);
+    const dbtn = document.createElement("button");
+    dbtn.className = "btn";
+    dbtn.textContent = "Details";
+    dbtn.title = "Extract per-row details from each company's consolidated page";
+    dbtn.addEventListener("click", () => runDetails(item, dbtn, status));
+    row.append(labelSpan, status, btn, dbtn, urlSpan);
     box.appendChild(row);
   }
 }
@@ -70,17 +75,102 @@ function chosenMode() {
   return $("replaceChk").checked ? "replace" : "append";
 }
 
-function runScrape(item, btn, status) {
+function modalConfirm({ title, message, okLabel = "Replace", danger = true }) {
+  return new Promise((resolve) => {
+    const backdrop = $("modalBackdrop");
+    const okBtn = $("modalOkBtn");
+    const cancelBtn = $("modalCancelBtn");
+    $("modalTitle").textContent = title;
+    $("modalMsg").textContent = message;
+    okBtn.textContent = okLabel;
+    okBtn.classList.toggle("danger", danger);
+    const done = (val) => {
+      backdrop.hidden = true;
+      okBtn.removeEventListener("click", onOk);
+      cancelBtn.removeEventListener("click", onCancel);
+      backdrop.removeEventListener("click", onBackdrop);
+      okBtn.removeEventListener("keydown", onKeys);
+      resolve(val);
+    };
+    const onOk = () => done(true);
+    const onCancel = () => done(false);
+    const onBackdrop = (e) => {
+      if (e.target === backdrop) done(false);
+    };
+    const onKeys = (e) => {
+      if (e.key === "Enter") done(true);
+      if (e.key === "Escape") done(false);
+    };
+    okBtn.addEventListener("click", onOk);
+    cancelBtn.addEventListener("click", onCancel);
+    backdrop.addEventListener("click", onBackdrop);
+    okBtn.addEventListener("keydown", onKeys);
+    cancelBtn.addEventListener("keydown", onKeys);
+    backdrop.hidden = false;
+    okBtn.focus();
+  });
+}
+
+async function runScrape(item, btn, status) {
+  const mode = chosenMode();
+  if (
+    mode === "replace" &&
+    !(await modalConfirm({
+      title: `Replace tab "${item.label}"?`,
+      message: "Existing data will be cleared before writing fresh results.",
+      okLabel: "Replace",
+    }))
+  ) {
+    return;
+  }
   btn.disabled = true;
+  setItemBusy(item.label, true);
+  $("stopBtn").disabled = false;
   status.className = "status";
   status.textContent = "starting...";
+  const v = parseInt($("maxPages").value, 10);
   port.postMessage({
     type: "scrape",
     spreadsheetId: state.spreadsheetId,
     item,
-    mode: chosenMode(),
-    maxPages: parseInt($("maxPages").value || "1", 10),
+    mode,
+    maxPages: Number.isFinite(v) && v > 0 ? v : 0,
   });
+}
+
+async function runDetails(item, btn, status) {
+  if (
+    chosenMode() === "replace" &&
+    !(await modalConfirm({
+      title: `Replace detail columns of "${item.label}"?`,
+      message: `The detail columns (${itemsDetailHeaders(item).join(", ")}) for "${item.label}" will be cleared and refilled. Continue?`,
+      okLabel: "Replace Details",
+    }))
+  ) {
+    return;
+  }
+  btn.disabled = true;
+  setItemBusy(item.label, true);
+  $("stopBtn").disabled = false;
+  status.className = "status";
+  status.textContent = "starting...";
+  port.postMessage({
+    type: "scrape_details",
+    spreadsheetId: state.spreadsheetId,
+    item,
+    mode: chosenMode(),
+  });
+}
+
+function itemEl(label) {
+  return [...document.querySelectorAll(".item")].find(
+    (el) => el.querySelector(".item-label").textContent === label
+  );
+}
+
+function setItemBusy(label, disabled) {
+  const el = itemEl(label);
+  if (el) el.querySelectorAll("button").forEach((b) => (b.disabled = disabled));
 }
 
 async function loadSheet(spreadsheetId) {
@@ -139,24 +229,34 @@ function init() {
       log(msg.message);
     } else if (msg.type === "complete") {
       const r = msg.result;
-      log(
-        `Done: ${r.written} rows into "${r.tabName}"${r.created ? " (tab created)" : ""}${r.skipped ? ` — ${r.skipped} duplicates skipped` : ""}.`,
-        "done"
-      );
-      const itemEl = [...document.querySelectorAll(".item")].find(
-        (el) => el.querySelector(".item-label").textContent === r.tabName
-      );
-      if (itemEl) {
-        const st = itemEl.querySelector(".status");
-        st.className = "status done";
-        st.textContent = `${r.written} rows ✓`;
-        const btn = itemEl.querySelector("button");
-        btn.disabled = false;
+      if (r.filled != null) {
+        log(
+          (r.stopped ? "Details stopped: " : "Details done: ") +
+            `${r.filled}/${r.total} rows filled in "${r.tabName}".`,
+          r.stopped ? "" : "done"
+        );
+      } else {
+        log(
+          (r.stopped ? "Stopped: " : "Done: ") +
+            `${r.written} rows into "${r.tabName}"${r.created ? " (tab created)" : ""}${r.skipped ? ` — ${r.skipped} duplicates skipped` : ""}.`,
+          r.stopped ? "" : "done"
+        );
       }
+      const itemEl2 = itemEl(r.tabName);
+      if (itemEl2) {
+        const st = itemEl2.querySelector(".status");
+        st.className = "status" + (r.stopped ? "" : " done");
+        st.textContent = (r.stopped ? "stopped " : "") + (r.filled != null ? `${r.filled} rows` : `${r.written} rows`);
+        itemEl2.querySelectorAll("button").forEach((b) => (b.disabled = false));
+      }
+      $("stopBtn").disabled = true;
       if (!scrapingAll) setTimeout(() => loadSheet(state.spreadsheetId), 1500);
+    } else if (msg.type === "stopped") {
+      log("Stop requested — finishing the current row then stopping.");
     } else if (msg.type === "error") {
       log("Error: " + msg.error, "error");
       [...document.querySelectorAll(".item button")].forEach((b) => (b.disabled = false));
+      $("stopBtn").disabled = true;
     } else if (msg.type === "login_result" || msg.type === "login_check") {
       setLoginState(msg);
     }
@@ -180,7 +280,22 @@ function init() {
     loadSheet(extractSheetId($("sheetId").value));
   });
 
+  $("stopBtn").addEventListener("click", () => {
+    $("stopBtn").disabled = true;
+    port.postMessage({ type: "stop" });
+  });
+
   $("scrapeAllBtn").addEventListener("click", async () => {
+    if (
+      chosenMode() === "replace" &&
+      !(await modalConfirm({
+        title: "Scrape All (Replace)?",
+        message: `Replace mode will clear existing data in every listed tab: ${state.settings.items.map((i) => i.label).join(", ") || "none"}. Continue?`,
+        okLabel: "Replace All",
+      }))
+    ) {
+      return;
+    }
     $("scrapeAllBtn").disabled = true;
     scrapingAll = true;
     for (const item of state.settings.items) {
@@ -193,7 +308,11 @@ function init() {
       btn.disabled = true;
       await new Promise((resolve) => {
         const doneCb = (m) => {
-          if ((m.type === "complete" && m.result.tabName === item.label) || m.type === "error") {
+          if (
+            (m.type === "complete" && m.result.tabName === item.label) ||
+            m.type === "error" ||
+            m.type === "stopped"
+          ) {
             port.onMessage.removeListener(doneCb);
             resolve();
           }
