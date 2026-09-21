@@ -419,7 +419,7 @@ async function fetchDetail(url) {
 }
 
 function resolveNextPagination(html, currentUrl) {
-  const nav = html.match(/class="pagination"[\s\S]*?<\/div>/i);
+  const nav = decodeAmp(html).match(/class="pagination"[\s\S]*?<\/div>/i);
   if (!nav) return null;
   for (const m of nav[0].matchAll(/href="([^"]*?[?&](?:p|page)=(\d+))"/gi)) {
     // Only treat it as "next" if it actually advances the page (1 → 2 …); ignore
@@ -436,7 +436,7 @@ function resolveNextPagination(html, currentUrl) {
 // "class=\"paginator\"" layout — Screener's raw screen paginates with ?page=N (some
 // older screens use ?p=N). Read whichever appears so totalPages is always known.
 function parsePaginator(html) {
-  const pag = html.match(/class="paginator"[\s\S]*?<\/p>/i);
+  const pag = decodeAmp(html).match(/class="paginator"[\s\S]*?<\/p>/i);
   if (!pag) return null;
   const nums = [];
   for (const m of pag[0].matchAll(/[?&](?:p|page)=(\d+)/g)) nums.push(parseInt(m[1], 10));
@@ -447,8 +447,14 @@ function parsePaginator(html) {
   };
 }
 
+// An "&" inside a page-link href is HTML-encoded as &amp;, which breaks any
+// literal-/&/ regex. Decode it so ?page=N / ?p=N links are always seen.
+function decodeAmp(html) {
+  return html.replace(/&amp;/gi, "&");
+}
+
 function resolvePaginatorNext(html, currentUrl, page) {
-  const pag = html.match(/class="paginator"[\s\S]*?<\/p>/i);
+  const pag = decodeAmp(html).match(/class="paginator"[\s\S]*?<\/p>/i);
   if (!pag) return null;
   let best = null;
   for (const m of pag[0].matchAll(/href="([^"]*?[?&](?:p|page)=(\d+))"/gi)) {
@@ -463,13 +469,13 @@ function resolvePaginatorNext(html, currentUrl, page) {
 // ?page=N instead of ?p=N. Scan the entire document so no next page is missed.
 function listPageNumbers(html) {
   const nums = [];
-  for (const m of html.matchAll(/[?&](?:p|page)=(\d+)/g)) nums.push(parseInt(m[1], 10));
+  for (const m of decodeAmp(html).matchAll(/[?&](?:p|page)=(\d+)/g)) nums.push(parseInt(m[1], 10));
   return nums;
 }
 
 function listPageHrefs(html) {
   const out = [];
-  for (const m of html.matchAll(/href="([^"]*?[?&](?:p|page)=(\d+))"/gi)) {
+  for (const m of decodeAmp(html).matchAll(/href="([^"]*?[?&](?:p|page)=(\d+))"/gi)) {
     out.push({ href: m[1], n: parseInt(m[2], 10) });
   }
   return out;
@@ -859,8 +865,9 @@ async function scrapePaged(url, maxPages, onPage, onBatch) {
     // Raw screens whose paginator links aren't wrapped in the known divs: scan
     // the whole page for any numbered page anchor (?page=N / ?p=N) beyond this.
     if (!next) next = resolveNextFromAnyAnchor(html, current, page);
-    // Safety net: when total pages are known, walk to the sequentially next page.
-    if (!next && totalPages && page < totalPages) {
+    // Safety net: walk to the sequentially next page. Stops automatically when a
+    // page returns no rows (Screener serves an empty list past the last page).
+    if (!next && page + 1 <= (totalPages || 1e6)) {
       next = buildPageUrl(current, page + 1);
     }
     if (!next) break;
