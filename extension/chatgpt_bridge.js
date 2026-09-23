@@ -69,6 +69,25 @@
     return false;
   }
 
+  // Start a fresh conversation so our prompt is never appended to the user's own chat,
+  // which previously caused a second message (double prompt) and stuck generation.
+  function clickNewChat() {
+    const selectors = [
+      'a[href*="/new" i]',
+      'button[data-testid="new-chat-button"]',
+      'button[aria-label="New chat" i]',
+      'button[aria-label="New Chat" i]',
+    ];
+    for (const s of selectors) {
+      const el = document.querySelector(s);
+      if (el && el.offsetParent !== null) {
+        el.click();
+        return true;
+      }
+    }
+    return false;
+  }
+
   async function toggleWebSearch() {
     const buttons = Array.from(document.querySelectorAll("button"));
     for (const b of buttons) {
@@ -140,23 +159,36 @@
   }
 
   window.__gptAssistant = {
+    busy: false,
     ask: async (prompt, opts) => {
-      const useSearch = opts && opts.webSearch !== false;
-      const composer = await waitForComposer();
-      if (!composer)
-        return { ok: false, error: "ChatGPT not ready. Please login and keep chatgpt.com open." };
-      if (useSearch) {
-        try {
-          await toggleWebSearch();
-        } catch (e) {}
+      if (window.__gptAssistant.busy)
+        return { ok: false, error: "ChatGPT already processing an earlier prompt." };
+      window.__gptAssistant.busy = true;
+      try {
+        const useSearch = opts && opts.webSearch !== false;
+        const composer = await waitForComposer();
+        if (!composer)
+          return { ok: false, error: "ChatGPT not ready. Please login and keep chatgpt.com open." };
+        try { clickNewChat(); } catch (e) {}
+        await sleep(1800); // let the new-chat composer settle
+        const fresh = await waitForComposer();
+        const comp = fresh || composer;
+        comp.focus();
+        if (useSearch) {
+          try {
+            await toggleWebSearch();
+          } catch (e) {}
+        }
+        setComposer(comp, prompt);
+        await sleep(500);
+        if (!clickSendButton())
+          return { ok: false, error: "Send button not found on chatgpt.com." };
+        const text = await waitForCompletion();
+        if (!text) return { ok: false, error: "ChatGPT returned empty reply." };
+        return { ok: true, text };
+      } finally {
+        window.__gptAssistant.busy = false;
       }
-      setComposer(composer, prompt);
-      await sleep(500);
-      if (!clickSendButton())
-        return { ok: false, error: "Send button not found on chatgpt.com." };
-      const text = await waitForCompletion();
-      if (!text) return { ok: false, error: "ChatGPT returned empty reply." };
-      return { ok: true, text };
     },
   };
 

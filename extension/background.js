@@ -1708,28 +1708,35 @@ async function ensureGptBridgeReady(tabId, timeoutMs = 60000) {
 
 // Drive one research pass: focus a chatgpt.com tab, inject the bridge, send the
 // prompt (web search ON), wait for the answer, then restore the user's tab.
+// Global lock: only one ChatGPT prompt can be in flight at a time, otherwise
+// two rows paste/send together and ChatGPT gets a second (double) prompt.
+let gptAskLock = Promise.resolve();
 async function handleChatGptAsk(prompt, opts) {
-  const prevTab = await getActiveTab();
-  const tab = await findOrOpenChatGptTab();
-  try {
-    const win = await chrome.windows.get(tab.windowId);
-    await chrome.windows.update(win.id, { focused: true });
-    await chrome.tabs.update(tab.id, { active: true });
-  } catch (e) {}
-  const restoreTab = async () => {
-    if (prevTab && prevTab.id !== tab.id) {
-      try { await chrome.tabs.update(prevTab.id, { active: true }); } catch (e) {}
+  const run = gptAskLock.then(async () => {
+    const prevTab = await getActiveTab();
+    const tab = await findOrOpenChatGptTab();
+    try {
+      const win = await chrome.windows.get(tab.windowId);
+      await chrome.windows.update(win.id, { focused: true });
+      await chrome.tabs.update(tab.id, { active: true });
+    } catch (e) {}
+    const restoreTab = async () => {
+      if (prevTab && prevTab.id !== tab.id) {
+        try { await chrome.tabs.update(prevTab.id, { active: true }); } catch (e) {}
+      }
+    };
+    const ready = await ensureGptBridgeReady(tab.id);
+    if (!ready) {
+      await restoreTab();
+      return { success: false, error: 'ChatGPT page not ready. Please open chatgpt.com and login in Chrome, then try again.' };
     }
-  };
-  const ready = await ensureGptBridgeReady(tab.id);
-  if (!ready) {
+    const res = await chrome.tabs.sendMessage(tab.id, { action: "__gptAsk", prompt, opts }).catch(() => null);
     await restoreTab();
-    return { success: false, error: 'ChatGPT page not ready. Please open chatgpt.com and login in Chrome, then try again.' };
-  }
-  const res = await chrome.tabs.sendMessage(tab.id, { action: "__gptAsk", prompt, opts }).catch(() => null);
-  await restoreTab();
-  if (res && res.ok) return { success: true, text: res.text };
-  return { success: false, error: (res && res.error) || "ChatGPT did not respond." };
+    if (res && res.ok) return { success: true, text: res.text };
+    return { success: false, error: (res && res.error) || "ChatGPT did not respond." };
+  });
+  gptAskLock = run.then(() => {}, () => {});
+  return run;
 }
 
 // Read the tab's rows (Link + Company), run up to maxRows of them through ChatGPT,
