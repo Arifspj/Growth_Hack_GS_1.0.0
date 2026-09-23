@@ -17,7 +17,7 @@
     "type": "module"
   },
   "action": {
-    "default_popup": "popup.html",
+    "default_popup": "popup2.html",
     "default_title": "Growth Hack GS",
     "default_icon": {
       "16": "icons/icon16.png",
