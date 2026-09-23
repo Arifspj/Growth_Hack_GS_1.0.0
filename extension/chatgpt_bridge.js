@@ -1,6 +1,7 @@
 // Tab agent injected into a chatgpt.com tab. It finds the composer box, pastes a
 // research prompt (web search ON), clicks Send, waits for the reply to finish,
 // then returns the last assistant answer to the background worker.
+// Mirrors the working flow from the Chart Screener Chrome project.
 (() => {
   if (window.__gptBridgeActive) return;
   window.__gptBridgeActive = true;
@@ -69,25 +70,6 @@
     return false;
   }
 
-  // Start a fresh conversation so our prompt is never appended to the user's own chat,
-  // which previously caused a second message (double prompt) and stuck generation.
-  function clickNewChat() {
-    const selectors = [
-      'a[href*="/new" i]',
-      'button[data-testid="new-chat-button"]',
-      'button[aria-label="New chat" i]',
-      'button[aria-label="New Chat" i]',
-    ];
-    for (const s of selectors) {
-      const el = document.querySelector(s);
-      if (el && el.offsetParent !== null) {
-        el.click();
-        return true;
-      }
-    }
-    return false;
-  }
-
   async function toggleWebSearch() {
     const buttons = Array.from(document.querySelectorAll("button"));
     for (const b of buttons) {
@@ -137,7 +119,7 @@
     return null;
   }
 
-  async function waitForCompletion() {
+  async function waitForCompletion(baselineText) {
     const t0 = Date.now();
     let lastText = "";
     while (Date.now() - t0 < 120000) {
@@ -145,50 +127,40 @@
         "button[data-testid=\"stop-button\"], button[aria-label*=\"Stop generating\" i]"
       );
       const txt = extractLastAnswer();
-      if (!stopBtn && txt && txt !== lastText) {
+      // Never return the pre-send answer (stale text left over from an earlier
+      // prompt/conversation) — only a fresh assistant reply that differs from it.
+      if (!stopBtn && txt && txt !== lastText && txt !== baselineText) {
         await sleep(1500);
         const txt2 = extractLastAnswer();
-        if (txt2 === txt && txt2.length > 0) return txt2;
+        if (txt2 === txt && txt2.length > 0 && txt2 !== baselineText) return txt2;
         lastText = txt;
       } else if (txt) {
         lastText = txt;
       }
       await sleep(800);
     }
-    return extractLastAnswer();
+    return extractLastAnswer() === baselineText ? "" : extractLastAnswer();
   }
 
   window.__gptAssistant = {
-    busy: false,
     ask: async (prompt, opts) => {
-      if (window.__gptAssistant.busy)
-        return { ok: false, error: "ChatGPT already processing an earlier prompt." };
-      window.__gptAssistant.busy = true;
-      try {
-        const useSearch = opts && opts.webSearch !== false;
-        const composer = await waitForComposer();
-        if (!composer)
-          return { ok: false, error: "ChatGPT not ready. Please login and keep chatgpt.com open." };
-        try { clickNewChat(); } catch (e) {}
-        await sleep(1800); // let the new-chat composer settle
-        const fresh = await waitForComposer();
-        const comp = fresh || composer;
-        comp.focus();
-        if (useSearch) {
-          try {
-            await toggleWebSearch();
-          } catch (e) {}
-        }
-        setComposer(comp, prompt);
-        await sleep(500);
-        if (!clickSendButton())
-          return { ok: false, error: "Send button not found on chatgpt.com." };
-        const text = await waitForCompletion();
-        if (!text) return { ok: false, error: "ChatGPT returned empty reply." };
-        return { ok: true, text };
-      } finally {
-        window.__gptAssistant.busy = false;
+      const useSearch = opts && opts.webSearch !== false;
+      const composer = await waitForComposer();
+      if (!composer)
+        return { ok: false, error: "ChatGPT not ready. Please login and keep chatgpt.com open." };
+      const baselineText = extractLastAnswer();
+      if (useSearch) {
+        try {
+          await toggleWebSearch();
+        } catch (e) {}
       }
+      setComposer(composer, prompt);
+      await sleep(500);
+      if (!clickSendButton())
+        return { ok: false, error: "Send button not found on chatgpt.com." };
+      const text = await waitForCompletion(baselineText);
+      if (!text) return { ok: false, error: "ChatGPT returned empty reply." };
+      return { ok: true, text };
     },
   };
 
