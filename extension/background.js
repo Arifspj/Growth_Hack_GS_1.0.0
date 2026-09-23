@@ -1634,7 +1634,7 @@ function grahamCalc(price, pe, bookValue, growth) {
 
   const composite = values.reduce((a, b) => a + b, 0) / values.length;
   const mos = Math.round(((composite - p) / p) * 100);
-  return { iv: Math.round(composite * 100) / 100, mos };
+  return { iv: Math.round(composite * 100) / 100, mos, price: p };
 }
 
 async function computeIntrinsic(spreadsheetId, tabName, mode, maxRows, onProgress) {
@@ -1713,7 +1713,7 @@ async function computeIntrinsic(spreadsheetId, tabName, mode, maxRows, onProgres
       growthIdx >= 0 ? row && row[growthIdx] : ""
     );
     if (!calc) { failed++; continue; }
-    pending.set(sheetRow, [calc.iv, calc.mos]);
+    pending.set(sheetRow, [calc.iv, `${calc.price} (${calc.mos}%)`]);
     filled++;
     onProgress({
       type: "progress",
