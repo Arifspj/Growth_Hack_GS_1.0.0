@@ -223,8 +223,8 @@
     </div>
     <div class="muted" style="margin:4px 14px 10px">AI button adds the AI columns (Summary, Linked Companies, Big Orders, Catalysts, Risks), then runs the first N rows through ChatGPT (web search ON) and fills each column per row.</div>
     <div class="seg">
-      <span class="chk"><input type="checkbox" id="appendChk"> Append (keep rows)</span>
-      <span class="chk"><input type="checkbox" id="replaceChk" checked> Replace tab</span>
+      <span class="chk"><input type="checkbox" id="appendChk" checked> Append (keep rows)</span>
+      <span class="chk"><input type="checkbox" id="replaceChk"> Replace tab</span>
     </div>
     <div class="list" id="items"></div>
     <div class="sec" style="border-bottom:none"><div class="log" id="log"></div></div>

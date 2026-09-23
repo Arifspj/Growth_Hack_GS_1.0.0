@@ -6,6 +6,7 @@ let credsCache = null;
 let tokenCache = { token: null, expiresAt: 0 };
 let stopRequested = false;
 let activeAbort = null;
+let gptTabId = null;
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
@@ -14,6 +15,11 @@ function cancelScrape() {
   if (activeAbort) {
     try {
       activeAbort.abort();
+    } catch {}
+  }
+  if (gptTabId != null) {
+    try {
+      chrome.tabs.sendMessage(gptTabId, { action: "__gptAbort" }).catch(() => {});
     } catch {}
   }
 }
@@ -1712,8 +1718,7 @@ async function ensureGptBridgeReady(tabId, timeoutMs = 60000) {
 async function handleChatGptAsk(prompt, opts) {
   const prevTab = await getActiveTab();
   const tab = await findOrOpenChatGptTab();
-  // ChatGPT pauses rendering when its tab is hidden, so briefly bring it to front,
-  // then restore the user's original tab after the answer completes.
+  gptTabId = tab.id;
   try {
     const win = await chrome.windows.get(tab.windowId);
     await chrome.windows.update(win.id, { focused: true });
@@ -1730,8 +1735,10 @@ async function handleChatGptAsk(prompt, opts) {
     return { success: false, error: 'ChatGPT page not ready. Please open chatgpt.com and login in Chrome, then try again.' };
   }
   const res = await chrome.tabs.sendMessage(tab.id, { action: "__gptAsk", prompt, opts }).catch(() => null);
+  gptTabId = null;
   await restoreTab();
   if (res && res.ok) return { success: true, text: res.text };
+  if (stopRequested) return { success: false, error: "Stopped by user." };
   return { success: false, error: (res && res.error) || "ChatGPT did not respond." };
 }
 
@@ -1818,10 +1825,16 @@ async function runAiResearch(spreadsheetId, tabName, mode, maxRows, onProgress) 
     }
     const prompt = buildAiResearchPrompt(detail);
     onProgress({ type: "progress", status: "ai", label: tabName, message: `AI ${ordinal + 1}/${total} — ${t.name} (ChatGPT researching…)` });
-    const res = await Promise.race([
-      handleChatGptAsk(prompt, { webSearch: true }),
-      new Promise((_, rej) => setTimeout(() => rej(new Error("ChatGPT timeout (260s)")), 260000)),
-    ]);
+    let res;
+    try {
+      res = await Promise.race([
+        handleChatGptAsk(prompt, { webSearch: true }),
+        new Promise((_, rej) => setTimeout(() => rej(new Error("ChatGPT timeout (260s)")), 260000)),
+      ]);
+    } catch (e) {
+      if (stopRequested) return "stopped";
+      return { failed: true, error: e.message || String(e) };
+    }
     if (stopRequested) return "stopped";
     if (!res.success) return { failed: true, error: res.error };
     const parsed = extractAiJson(res.text);

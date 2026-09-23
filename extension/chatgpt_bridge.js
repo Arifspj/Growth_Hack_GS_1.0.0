@@ -2,9 +2,10 @@
 // research prompt (web search ON), clicks Send, waits for the reply to finish,
 // then returns the last assistant answer to the background worker.
 // Mirrors the working flow from the Chart Screener Chrome project.
-(() => {
+( () => {
   if (window.__gptBridgeActive) return;
   window.__gptBridgeActive = true;
+  window.__gptAborted = false;
   console.log("ChatGPT bridge loaded");
 
   const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
@@ -128,6 +129,7 @@
     let everSeenFresh = false;
 
     while (Date.now() < deadline) {
+      if (window.__gptAborted) return "";
       const stopBtn = document.querySelector(stopBtnSel);
       const txt = extractLastAnswer();
       const fresh = !!txt && txt !== baselineText;
@@ -163,6 +165,7 @@
       return run;
     },
     _ask: async (prompt, opts) => {
+      window.__gptAborted = false;
       const useSearch = opts && opts.webSearch !== false;
       const composer = await waitForComposer();
       if (!composer)
@@ -220,6 +223,11 @@
       if (!msg) return;
       if (msg.action === "__gptGetBridge") {
         sendResponse({ ready: !!window.__gptAssistant });
+        return;
+      }
+      if (msg.action === "__gptAbort") {
+        window.__gptAborted = true;
+        sendResponse({ aborted: true });
         return;
       }
       if (msg.action === "__gptAsk") {
