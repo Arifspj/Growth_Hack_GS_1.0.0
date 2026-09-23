@@ -204,7 +204,7 @@
         <button class="btn primary" id="scrapeAllBtn" disabled>Scrape All</button>
       </span>
     </div>
-    <div class="muted" style="margin:4px 14px 10px">AI button runs the first N rows through ChatGPT (web search ON) and writes the JSON reply into the "AI Research (JSON)" column.</div>
+    <div class="muted" style="margin:4px 14px 10px">AI button adds the AI columns (Summary, Linked Companies, Big Orders, Catalysts, Risks), then runs the first N rows through ChatGPT (web search ON) and fills each column per row.</div>
     <div class="seg">
       <span class="chk"><input type="checkbox" id="appendChk"> Append (keep rows)</span>
       <span class="chk"><input type="checkbox" id="replaceChk" checked> Replace tab</span>
@@ -297,7 +297,7 @@
       const abtn = document.createElement("button");
       abtn.className = "btn ai";
       abtn.textContent = "AI";
-      abtn.title = 'Run the first N rows through ChatGPT research and write the JSON into the "AI Research (JSON)" column';
+      abtn.title = 'Run the first N rows through ChatGPT research and fill the AI Summary / Linked Companies / Big Orders / Catalysts / Risks columns';
       abtn.addEventListener("click", () => runAiResearch(item, abtn, status));
       const vTag = document.createElement("span");
       vTag.className = "verTag";

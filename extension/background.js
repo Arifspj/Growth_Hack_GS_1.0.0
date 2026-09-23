@@ -1487,7 +1487,37 @@ async function scrapeDetails(spreadsheetId, tabName, mode, onProgress) {
 }
 
 // ---------- AI Research (ChatGPT) ----------
-const AI_HEADER = "AI Research (JSON)";
+// Output columns, one per field in the prompt's JSON shape. The AI button adds
+// these columns to the sheet, then fills them per row on the row's own line.
+const AI_HEADER = "AI Research";
+const AI_COLUMNS = [
+  "AI Summary",
+  "AI Linked Companies",
+  "AI Big Orders",
+  "AI Catalysts",
+  "AI Risks",
+];
+
+// One cell string per AI_COLUMNS entry, from ChatGPT's parsed JSON.
+function aiRowCells(parsed) {
+  if (!parsed || typeof parsed !== "object") return AI_COLUMNS.map(() => "");
+  const list = (arr, fn) =>
+    Array.isArray(arr) ? arr.map(fn).filter(Boolean).join("\n") : "";
+  const link = (x) =>
+    ["name", "relation"].filter((k) => x && x[k]).map((k) => x[k]).join(" — ") +
+    (x && x.source ? ` [${x.source}]` : "");
+  const order = (x) =>
+    ["desc", "value", "date"].filter((k) => x && x[k]).map((k) => x[k]).join(" — ") +
+    (x && x.source ? ` [${x.source}]` : "");
+  const point = (x) => (x && x.point ? x.point + (x && x.source ? ` [${x.source}]` : "") : "");
+  return [
+    String(parsed.summary || ""),
+    list(parsed.linkedCompanies, link),
+    list(parsed.bigOrders, order),
+    list(parsed.catalysts, point),
+    list(parsed.risks, point),
+  ];
+}
 
 // Company profile block: <div class="company-profile"> with an "About" div and
 // a "Key Points" commentary block of <p> paragraphs (optional <strong> title).
@@ -1705,7 +1735,8 @@ async function handleChatGptAsk(prompt, opts) {
 }
 
 // Read the tab's rows (Link + Company), run up to maxRows of them through ChatGPT,
-// and write the returned JSON into the "AI Research (JSON)" column.
+// and write each answer field into its own column for that row (columns are added
+// first, in the order defined by the prompt's JSON shape).
 async function runAiResearch(spreadsheetId, tabName, mode, maxRows, onProgress) {
   const rawTab = tabName;
   onProgress({ type: "progress", status: "ai", label: tabName, message: `Reading rows from "${rawTab}"…` });
@@ -1716,20 +1747,27 @@ async function runAiResearch(spreadsheetId, tabName, mode, maxRows, onProgress) 
   if (linkIdx < 0) {
     throw new Error(`Tab "${rawTab}" has no "Link" column — run the main scrape first.`);
   }
-  let aiCol = headerRow.findIndex((h) => normLabel(h).indexOf("airesearch") === 0);
+  let aiCol = -1;
+  for (let i = 0; i < headerRow.length; i++) {
+    if (AI_COLUMNS.some((c) => normLabel(headerRow[i]) === normLabel(c) || normLabel(headerRow[i]).indexOf("ai ") === 0)) {
+      aiCol = i;
+      break;
+    }
+  }
   if (aiCol < 0) aiCol = grid[0].length; // append after the last used column
-  const aiLetter = columnLetter(aiCol + 1);
-  // Make sure the AI column actually exists in the sheet's grid before clearing/writing,
+  const firstLetter = columnLetter(aiCol + 1);
+  const lastLetter = columnLetter(aiCol + AI_COLUMNS.length);
+  // The AI columns must exist in the sheet's grid before clearing/writing,
   // otherwise clear/update on a column beyond grid limits fails with a 400.
   const gi = await expandSheetGrid(spreadsheetId, rawTab, {
     rows: Math.max(grid.length + 1, 2),
-    cols: aiCol + 1,
+    cols: aiCol + AI_COLUMNS.length,
   });
   if (mode === "replace") {
     // Clear only within the sheet's actual grid (rows = current grid height).
-    await clearValues(spreadsheetId, `${rawTab}!${aiLetter}2:${aiLetter}${gi.rowCount}`);
+    await clearValues(spreadsheetId, `${rawTab}!${firstLetter}2:${lastLetter}${gi.rowCount}`);
   }
-  await updateValues(spreadsheetId, `${rawTab}!${aiLetter}1`, [[AI_HEADER]]);
+  await updateValues(spreadsheetId, `${rawTab}!${firstLetter}1:${lastLetter}1`, [AI_COLUMNS]);
 
   const limit = Number.isFinite(maxRows) && maxRows > 0 ? maxRows : 0; // 0 = all rows
   const targets = [];
@@ -1787,8 +1825,9 @@ async function runAiResearch(spreadsheetId, tabName, mode, maxRows, onProgress) 
       continue;
     }
     const parsed = extractAiJson(res.text);
-    const cell = parsed ? JSON.stringify(parsed) : res.text;
-    await updateValues(spreadsheetId, `${rawTab}!${aiLetter}${t.gi + 1}`, [[cell]]).catch((e) => { failed++; });
+    const cells = aiRowCells(parsed);
+    if (!parsed && res.text) cells[0] = res.text;
+    await updateValues(spreadsheetId, `${rawTab}!${firstLetter}${t.gi + 1}:${lastLetter}${t.gi + 1}`, [cells]).catch((e) => { failed++; });
     filled++;
     onProgress({ type: "progress", status: "ai", label: tabName, message: `AI ${i + 1}/${total} — ${t.name}: done` });
   }
