@@ -130,6 +130,12 @@
   .winbtn button { width: 26px; height: 26px; border: none; border-radius: 8px; background: rgba(255, 255, 255, .16); color: #fff; cursor: pointer; font-size: 13px; line-height: 1; display: flex; align-items: center; justify-content: center; transition: background .12s ease, transform .12s ease; }
   .winbtn button:hover { background: rgba(255, 255, 255, .3); transform: scale(1.08); }
   .sec { padding: 12px 14px; border-bottom: 1px solid #eef1f4; }
+  .acc-head { width: 100%; display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 10px 14px; background: #f6f8fa; border: none; border-bottom: 1px solid #eef1f4; cursor: pointer; text-align: left; font-family: inherit; }
+  .acc-head span { font-weight: 700; font-size: 11.5px; color: #374151; text-transform: uppercase; letter-spacing: .4px; }
+  .acc-head .chev { font-size: 11px; color: #6b7280; transition: transform .15s ease; }
+  .acc.open .acc-head .chev { transform: rotate(90deg); }
+  .acc-body { display: none; }
+  .acc.open .acc-body { display: block; }
   .muted { color: #6b7280; font-size: 11px; }
   .row { display: flex; align-items: center; gap: 8px; }
   .between { justify-content: space-between; }
@@ -179,22 +185,31 @@
       </span>
     </div>
     <div class="diag" id="diag" style="display:none;font-size:10px;color:#b45309;background:#fef3c7;border-bottom:1px solid #fcd34d;padding:5px 14px"></div>
-    <div class="sec">
-      <label for="sheetId">Google Sheet URL or ID</label>
-      <div class="row">
-        <input id="sheetId" type="text" placeholder="https://docs.google.com/spreadsheets/d/...">
-        <button class="btn" id="loadBtn">Load</button>
+    <div class="acc open" id="accSheet">
+      <button class="acc-head" type="button">Google Sheet URL or ID <span class="chev">&#9654;</span></button>
+      <div class="acc-body">
+        <div class="sec" style="border-bottom:none">
+          <label for="sheetId">Google Sheet URL or ID</label>
+          <div class="row">
+            <input id="sheetId" type="text" placeholder="https://docs.google.com/spreadsheets/d/...">
+            <button class="btn" id="loadBtn">Load</button>
+          </div>
+        </div>
       </div>
     </div>
-    <div class="sec">
-      <label for="loginEmail">Screener login (needed for Results &amp; Full-text search)</label>
-      <input id="loginEmail" type="email" placeholder="screener email" autocomplete="username">
-      <input id="loginPass" type="password" placeholder="screener password" autocomplete="current-password" style="margin-top:6px">
-      <div class="row between" style="margin-top:8px">
-        <label class="chk" style="margin:0"><input type="checkbox" id="rememberChk"> Remember</label>
-        <button class="btn primary" id="loginBtn">Login to Screener</button>
+    <div class="acc" id="accLogin">
+      <button class="acc-head" type="button">Screener login (for Results &amp; Full-text search) <span class="chev">&#9654;</span></button>
+      <div class="acc-body">
+        <div class="sec" style="border-bottom:none">
+          <input id="loginEmail" type="email" placeholder="screener email" autocomplete="username">
+          <input id="loginPass" type="password" placeholder="screener password" autocomplete="current-password" style="margin-top:6px">
+          <div class="row between" style="margin-top:8px">
+            <label class="chk" style="margin:0"><input type="checkbox" id="rememberChk"> Remember</label>
+            <button class="btn primary" id="loginBtn">Login to Screener</button>
+          </div>
+          <div class="muted" id="loginState">Checking login…</div>
+        </div>
       </div>
-      <div class="muted" id="loginState">Checking login…</div>
     </div>
     <div class="sec">
       <div class="row between">
@@ -258,6 +273,11 @@
     log("Reloading this sheet…");
     location.reload();
   });
+
+  for (const acc of root.querySelectorAll(".acc")) {
+    const head = acc.querySelector(".acc-head");
+    head.addEventListener("click", () => acc.classList.toggle("open"));
+  }
 
   function log(msg, cls = "") {
     const div = document.createElement("div");
