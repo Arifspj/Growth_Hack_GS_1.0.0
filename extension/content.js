@@ -91,6 +91,10 @@
 
   if (!location.hostname.endsWith("docs.google.com")) return;
 
+  // Only run on the configured sheet (the "added link"); skip every other document.
+  const curSheet = (location.href.match(/\/spreadsheets\/d\/([a-zA-Z0-9\-_]+)/) || [])[1];
+  if (!curSheet || curSheet !== DEFAULT_SHEET) return;
+
   // ---------- floating widget ----------
   const st = { settings: null, spreadsheetId: null, port: null, pinned: false };
 
