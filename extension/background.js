@@ -1391,8 +1391,20 @@ async function scrapeDetails(spreadsheetId, tabName, mode, onProgress) {
     label: tabName,
     message: `Reading rows from "${rawTab}"…`,
   });
-  const [grid, warmOk] = await Promise.all([
-    getValues(spreadsheetId, `${rawTab}!A1:N20000`),
+  // Read the full used grid so a previous Details/append run with columns far
+  // beyond N is still seen (startCol detection + append must never be off by the
+  // "only read up to N" mistake).
+  const [gridInfo, grid, warmOk] = await Promise.all([
+    getSheetGridInfo(spreadsheetId, rawTab),
+    (async () => {
+      try {
+        const gi_ = await getSheetGridInfo(spreadsheetId, rawTab);
+        const lastCol = columnLetter(Math.max(1, gi_.columnCount));
+        return await getValues(spreadsheetId, `${rawTab}!A1:${lastCol}${Math.max(0, gi_.rowCount)}`);
+      } catch {
+        return await getValues(spreadsheetId, `${rawTab}!A1:N20000`);
+      }
+    })(),
     withTimeout(
       (async () => {
         const tab = await ensureScraperWindow(`${SCREENER_BASE}/`);
@@ -1403,6 +1415,7 @@ async function scrapeDetails(spreadsheetId, tabName, mode, onProgress) {
       25000
     ).catch(() => null),
   ]);
+  void gridInfo;
   onProgress({
     type: "progress",
     status: "details",
@@ -1428,29 +1441,50 @@ async function scrapeDetails(spreadsheetId, tabName, mode, onProgress) {
   const detailHeaders = DETAIL_FIELDS.map((f) => f[1]);
   const firstLetter = columnLetter(startCol + 1);
   const lastLetter = columnLetter(startCol + detailHeaders.length);
+  // The detail columns must exist in the sheet's grid before clearing/writing,
+  // otherwise clear/update on a column beyond grid limits fails with a 400.
+  const gi2 = await expandSheetGrid(spreadsheetId, rawTab, {
+    rows: Math.max(grid.length + 1, 2),
+    cols: startCol + detailHeaders.length,
+  });
   await updateValues(spreadsheetId, `${rawTab}!${firstLetter}1:${lastLetter}1`, [detailHeaders]);
   if (mode === "replace") {
-    const gi = await expandSheetGrid(spreadsheetId, rawTab, {
-      rows: Math.max(grid.length + 1, 2),
-      cols: startCol + detailHeaders.length,
-    });
-    await clearValues(spreadsheetId, `${rawTab}!${firstLetter}2:${lastLetter}${gi.rowCount}`);
+    await clearValues(spreadsheetId, `${rawTab}!${firstLetter}2:${lastLetter}${gi2.rowCount}`);
   }
 
   let filled = 0;
   let skipped = 0;
   let failed = 0;
-  let buffer = [];
-  let bufferStart = 0;
+  const pending = new Map();
 
   const flush = async () => {
-    if (!buffer.length) return;
-    await updateValues(
-      spreadsheetId,
-      `${rawTab}!${firstLetter}${bufferStart}:${lastLetter}${bufferStart + buffer.length - 1}`,
-      buffer
-    );
-    buffer = [];
+    if (!pending.size) return;
+    // Group pending writes into contiguous row runs; each row keeps its exact
+    // sheet row so skipped rows never shift the remaining data up/down.
+    const runs = [];
+    let curStart = null;
+    let curEnd = null;
+    const ordered = [...pending.keys()].sort((a, b) => a - b);
+    for (const row of ordered) {
+      if (curEnd != null && row === curEnd + 1) {
+        curEnd = row;
+      } else {
+        if (curStart != null) runs.push([curStart, curEnd]);
+        curStart = row;
+        curEnd = row;
+      }
+    }
+    if (curStart != null) runs.push([curStart, curEnd]);
+    for (const [rs, re] of runs) {
+      const values = [];
+      for (let r = rs; r <= re; r++) values.push(pending.get(r));
+      await updateValues(
+        spreadsheetId,
+        `${rawTab}!${firstLetter}${rs}:${lastLetter}${re}`,
+        values
+      );
+    }
+    pending.clear();
   };
 
   const total = grid.length - 1;
@@ -1477,10 +1511,9 @@ async function scrapeDetails(spreadsheetId, tabName, mode, onProgress) {
       const { html, source } = await fetchDetail(url);
       if (stopRequested) break;
       const values = extractDetails(html);
-      if (buffer.length === 0) bufferStart = sheetRow;
-      buffer.push(values);
+      pending.set(sheetRow, values);
       filled++;
-      if (buffer.length >= 20) await flush();
+      if (pending.size >= 20) await flush();
       if (source !== "tab-dom") {
         onProgress({
           type: "progress",
