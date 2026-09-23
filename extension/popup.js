@@ -74,6 +74,14 @@ function renderItems() {
     row.append(labelSpan, status, btn, dbtn, abtn, urlSpan);
     box.appendChild(row);
   }
+  const diag = $("diag");
+  if (diag) {
+    const cnt = items.length;
+    const aiBtns = [...box.querySelectorAll(".btn.ai")].length;
+    const rf = !!$("refreshBtn") && !!$("refreshBtn2");
+    diag.hidden = false;
+    diag.textContent = `v1.0.4 JS loaded | items: ${cnt} | AI buttons: ${aiBtns} | refresh: ${rf ? "yes" : "no"}`;
+  }
 }
 
 function chosenMode() {
@@ -372,6 +380,7 @@ function init() {
       log("Refresh failed: " + err.message, "error");
     }
   });
+  $("refreshBtn2").addEventListener("click", () => $("refreshBtn").click());
 
   (async () => {
     const saved = await chrome.storage.local.get(["screenerEmail", "screenerRemember"]);
