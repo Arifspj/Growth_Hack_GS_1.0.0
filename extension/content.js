@@ -185,7 +185,7 @@
       </span>
     </div>
     <div class="diag" id="diag" style="display:none;font-size:10px;color:#b45309;background:#fef3c7;border-bottom:1px solid #fcd34d;padding:5px 14px"></div>
-    <div class="acc open" id="accSheet">
+    <div class="acc" id="accSheet">
       <button class="acc-head" type="button">Google Sheet URL or ID <span class="chev">&#9654;</span></button>
       <div class="acc-body">
         <div class="sec" style="border-bottom:none">
