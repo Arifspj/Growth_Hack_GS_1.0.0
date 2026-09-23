@@ -1595,6 +1595,109 @@ const AI_COLUMNS = [
   "AI Risks",
 ];
 
+// ---------- Intrinsic Value (Graham) ----------
+// Computed purely from columns already in the sheet (EPS, Profit Growth, Current
+// Price), so no network/rows fetch is needed — the columns are auto-detected by
+// header name wherever they sit (Scrape/Details/AI can reorder columns).
+const INTRINSIC_COLUMNS = ["Intrinsic Value", "Margin of Safety %"];
+
+// Graham: IV = EPS x (8.5 + 2 x growth). MoS% = (IV - price)/price x 100.
+// Returns the simple signed % number (e.g. 900, -65) — no sign/colour tag.
+function grahamCalc(eps, price, growth) {
+  const e = toNum(eps);
+  if (!isFinite(e)) return null;
+  const g = isFinite(toNum(growth)) ? toNum(growth) : 0;
+  const iv = e * (8.5 + 2 * g);
+  const p = toNum(price);
+  const mos = isFinite(p) && p > 0 ? Math.round(((iv - p) / p) * 100) : null;
+  return { iv: Math.round(iv * 100) / 100, mos };
+}
+
+async function computeIntrinsic(spreadsheetId, tabName, mode, maxRows, onProgress) {
+  const rawTab = tabName;
+  onProgress({ type: "progress", status: "intrinsic", label: tabName, message: `Reading rows from "${rawTab}"…` });
+  const grid = await getValues(spreadsheetId, `${rawTab}!A1:ZZ20000`);
+  if (!grid.length) throw new Error(`Tab "${rawTab}" is empty — run Scrape + Details first.`);
+
+  // Auto-detect columns by header name (case/spaces/punctuation-insensitive).
+  const findCol = (re) => {
+    const idxs = [];
+    for (let i = 0; i < grid[0].length; i++) if (re.test(normLabel(grid[0][i]))) idxs.push(i);
+    if (!idxs.length) return -1;
+    if (idxs.length === 1) return idxs[0];
+    // Multiple identical headers (e.g. two "Current Price"): pick the one that
+    // actually has numeric data in the data rows.
+    let best = idxs[0], bestN = -1;
+    for (const i of idxs) {
+      let n = 0;
+      for (let ri = 1; ri < Math.min(grid.length, 60); ri++) {
+        if (isFinite(toNum(grid[ri] && grid[ri][i]))) n++;
+      }
+      if (n > bestN) { bestN = n; best = i; }
+    }
+    return best;
+  };
+  const epsIdx = findCol(/^eps$/);
+  const priceIdx = findCol(/^currentprice$/);
+  const growthIdx = findCol(/^profitgrowth/);
+  const linkIdx = findCol(/^link$/);
+  if (epsIdx < 0 || priceIdx < 0) {
+    throw new Error(`Tab "${rawTab}" needs "EPS" and "Current Price" columns — run Details first.`);
+  }
+
+  // Append the two intrinsic columns at the very end (after AI columns).
+  let startCol = 0;
+  for (const r of grid) startCol = Math.max(startCol, r ? r.length : 0);
+  const firstLetter = columnLetter(startCol + 1);
+  const lastLetter = columnLetter(startCol + INTRINSIC_COLUMNS.length);
+  const giInfo = await expandSheetGrid(spreadsheetId, rawTab, {
+    rows: Math.max(grid.length + 1, 2),
+    cols: startCol + INTRINSIC_COLUMNS.length,
+  });
+  await updateValues(spreadsheetId, `${rawTab}!${firstLetter}1:${lastLetter}1`, [INTRINSIC_COLUMNS]);
+  if (mode === "replace") {
+    await clearValues(spreadsheetId, `${rawTab}!${firstLetter}2:${lastLetter}${giInfo.rowCount}`);
+  }
+
+  const rowsSet = parseRowSelector(maxRows);
+  const existing = grid.map((r) => r[startCol] || "");
+  const total = grid.length - 1;
+  const pending = new Map();
+  let filled = 0, skipped = 0, failed = 0;
+  const flush = async () => {
+    const rows = [...pending.keys()].sort((a, b) => a - b);
+    if (!rows.length) return;
+    const rs = rows[0], re = rows[rows.length - 1];
+    const values = rows.map((r) => pending.get(r));
+    await updateValues(spreadsheetId, `${rawTab}!${firstLetter}${rs}:${lastLetter}${re}`, values);
+    pending.clear();
+  };
+  for (let gi = 1; gi < grid.length; gi++) {
+    if (stopRequested) break;
+    const row = grid[gi];
+    const sheetRow = gi + 1;
+    if (rowsSet && !rowsSet.has(sheetRow)) { skipped++; continue; }
+    const link = String((row && (linkIdx >= 0 ? row[linkIdx] : row[1])) || "").trim();
+    if (!link) { skipped++; continue; }
+    if (!rowsSet && mode !== "replace" && String(existing[gi] || "").trim()) { skipped++; continue; }
+    const calc = grahamCalc(row && row[epsIdx], row && row[priceIdx], growthIdx >= 0 ? row && row[growthIdx] : "");
+    if (!calc) { failed++; continue; }
+    pending.set(sheetRow, [calc.iv, calc.mos]);
+    filled++;
+    onProgress({
+      type: "progress",
+      status: "intrinsic",
+      label: tabName,
+      message: `Intrinsic ${sheetRow}/${total} — IV ${calc.iv}${calc.mos != null ? `, MoS ${calc.mos}%` : ""}`,
+    });
+    if (pending.size >= 20) await flush();
+  }
+  await flush();
+  const stopped = stopRequested;
+  stopRequested = false;
+  return { tabName: rawTab, filled, skipped, failed, total, stopped, intrinsic: true };
+}
+
 // One cell string per AI_COLUMNS entry, from ChatGPT's parsed JSON.
 function aiRowCells(parsed) {
   if (!parsed || typeof parsed !== "object") return AI_COLUMNS.map(() => "");
@@ -2140,6 +2243,16 @@ chrome.runtime.onConnect.addListener((port) => {
           msg.spreadsheetId,
           (msg.item && msg.item.label) || "",
           msg.mode || "replace",
+          String(msg.maxRows == null ? "" : msg.maxRows).trim(),
+          (p) => port.postMessage(p)
+        );
+        port.postMessage({ type: "complete", result });
+      } else if (msg.type === "intrinsic") {
+        stopRequested = false;
+        const result = await computeIntrinsic(
+          msg.spreadsheetId,
+          (msg.item && msg.item.label) || "",
+          msg.mode || "append",
           String(msg.maxRows == null ? "" : msg.maxRows).trim(),
           (p) => port.postMessage(p)
         );

@@ -71,7 +71,12 @@ function renderItems() {
     abtn.textContent = "AI";
     abtn.title = 'Run the first N rows through ChatGPT research and write the JSON into the "AI Research (JSON)" column';
     abtn.addEventListener("click", () => runAiResearch(item, abtn, status));
-    row.append(labelSpan, status, btn, dbtn, abtn, urlSpan);
+    const ivBtn = document.createElement("button");
+    ivBtn.className = "btn iv";
+    ivBtn.textContent = "IV";
+    ivBtn.title = "Compute Graham Intrinsic Value + Margin of Safety % from the EPS / Profit Growth / Current Price columns (auto-detected) and append them at the end";
+    ivBtn.addEventListener("click", () => runIntrinsic(item, ivBtn, status));
+    row.append(labelSpan, status, btn, dbtn, abtn, ivBtn, urlSpan);
     box.appendChild(row);
   }
   const diag = $("diag");
@@ -195,6 +200,21 @@ async function runAiResearch(item, btn, status) {
   });
 }
 
+async function runIntrinsic(item, btn, status) {
+  btn.disabled = true;
+  setItemBusy(item.label, true);
+  $("stopBtn").disabled = false;
+  status.className = "status";
+  status.textContent = "starting...";
+  port.postMessage({
+    type: "intrinsic",
+    spreadsheetId: state.spreadsheetId,
+    item,
+    mode: chosenMode(),
+    maxRows: limitFromInput(),
+  });
+}
+
 function itemEl(label) {
   return [...document.querySelectorAll(".item")].find(
     (el) => el.querySelector(".item-label").textContent === label
@@ -263,7 +283,7 @@ function init() {
     } else if (msg.type === "complete") {
       const r = msg.result;
       if (r.filled != null) {
-        const what = r.ai ? "rows researched" : "rows filled";
+        const what = r.ai ? "rows researched" : r.intrinsic ? "rows valued" : "rows filled";
         log(
           (r.stopped ? "Stopped: " : "Done: ") +
             `${r.filled}/${r.total} ${what} in "${r.tabName}".`,
@@ -281,7 +301,7 @@ function init() {
         const st = itemEl2.querySelector(".status");
         st.className = "status" + (r.stopped ? "" : " done");
         if (r.filled != null) {
-          st.textContent = (r.stopped ? "stopped " : "") + `${r.filled} rows${r.ai ? " researched" : " filled"}`;
+          st.textContent = (r.stopped ? "stopped " : "") + `${r.filled} rows${r.ai ? " researched" : r.intrinsic ? " valued" : " filled"}`;
         } else {
           st.textContent = (r.stopped ? "stopped " : "") + `${r.written} rows`;
         }

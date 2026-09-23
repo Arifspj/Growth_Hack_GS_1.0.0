@@ -152,6 +152,8 @@
   button.btn:active:not(:disabled) { transform: translateY(0) scale(.97); }
   button.btn.primary { background: linear-gradient(135deg, #10b981, #059669); border: none; color: #fff; box-shadow: 0 2px 8px rgba(5, 150, 105, .35); }
   button.btn.ai { background: linear-gradient(135deg, #6366f1, #4f46e5); border: none; color: #fff; box-shadow: 0 2px 8px rgba(79, 70, 229, .35); }
+  button.btn.iv { background: linear-gradient(135deg, #f59e0b, #d97706); border: none; color: #fff; box-shadow: 0 2px 8px rgba(217, 119, 6, .35); }
+  button.btn.iv:hover:not(:disabled) { filter: brightness(1.08); background: linear-gradient(135deg, #f59e0b, #d97706); }
   button.btn.ai:hover:not(:disabled) { filter: brightness(1.08); background: linear-gradient(135deg, #6366f1, #4f46e5); }
   button.btn.primary:hover:not(:disabled) { filter: brightness(1.06); background: linear-gradient(135deg, #10b981, #059669); }
   button.btn:disabled { opacity: .55; cursor: not-allowed; box-shadow: none; }
@@ -320,11 +322,16 @@
       abtn.textContent = "AI";
       abtn.title = 'Run the first N rows through ChatGPT research and fill the AI Summary / Linked Companies / Big Orders / Catalysts / Risks columns';
       abtn.addEventListener("click", () => runAiResearch(item, abtn, status));
+      const ivBtn = document.createElement("button");
+      ivBtn.className = "btn iv";
+      ivBtn.textContent = "IV";
+      ivBtn.title = "Compute Graham Intrinsic Value + Margin of Safety % from the EPS / Profit Growth / Current Price columns (auto-detected) and append them at the end";
+      ivBtn.addEventListener("click", () => runIntrinsic(item, ivBtn, status));
       const vTag = document.createElement("span");
       vTag.className = "verTag";
       vTag.textContent = "v1.0.9";
       vTag.style.cssText = "display:none";
-      row.append(labelSpan, status, btn, dbtn, abtn, vTag);
+      row.append(labelSpan, status, btn, dbtn, abtn, ivBtn, vTag);
       box.appendChild(row);
     }
     const diag = root.getElementById("diag");
@@ -400,6 +407,24 @@ function runAiResearch(item, btn, status) {
   });
 }
 
+function runIntrinsic(item, btn, status) {
+  if (chosenMode() === "replace" && !window.confirm(`Recompute intrinsic value for all rows of "${item.label}"? Existing values will be cleared.`)) {
+    return;
+  }
+  btn.disabled = true;
+  updateItemButtons(item.label, true);
+  root.getElementById("stopBtn").disabled = false;
+  status.className = "status";
+  status.textContent = "starting…";
+  st.port.postMessage({
+    type: "intrinsic",
+    spreadsheetId: st.spreadsheetId,
+    item,
+    mode: chosenMode(),
+    maxRows: limitFromInput(),
+  });
+}
+
 function updateItemButtons(label, disabled) {
   const el = itemElByLabel(label);
   if (el) el.querySelectorAll("button").forEach((b) => (b.disabled = disabled));
@@ -435,7 +460,7 @@ function updateItemButtons(label, disabled) {
       } else if (msg.type === "complete") {
         const r = msg.result;
         if (r.filled != null) {
-          const what = r.ai ? "rows researched" : "rows filled";
+          const what = r.ai ? "rows researched" : r.intrinsic ? "rows valued" : "rows filled";
           log(
             r.stopped
               ? `Details stopped: ${r.filled}/${r.total} ${what} in "${r.tabName}"`
@@ -454,7 +479,7 @@ function updateItemButtons(label, disabled) {
           stEl.className = "status" + (r.stopped ? "" : " done");
           stEl.textContent =
             (r.stopped ? "stopped " : "") +
-            (r.filled != null && r.ai ? `${r.filled} rows researched` : r.filled != null ? `${r.filled} rows filled` : `${r.written} rows`);
+            (r.filled != null && r.ai ? `${r.filled} rows researched` : r.filled != null && r.intrinsic ? `${r.filled} rows valued` : r.filled != null ? `${r.filled} rows filled` : `${r.written} rows`);
           el.querySelectorAll("button").forEach((b) => (b.disabled = false));
         }
         root.getElementById("stopBtn").disabled = true;
