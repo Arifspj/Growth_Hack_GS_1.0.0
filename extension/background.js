@@ -1504,12 +1504,10 @@ function aiRowCells(parsed) {
   const list = (arr, fn) =>
     Array.isArray(arr) ? arr.map(fn).filter(Boolean).join("\n") : "";
   const link = (x) =>
-    ["name", "relation"].filter((k) => x && x[k]).map((k) => x[k]).join(" — ") +
-    (x && x.source ? ` [${x.source}]` : "");
+    ["name", "relation"].filter((k) => x && x[k]).map((k) => x[k]).join(" — ");
   const order = (x) =>
-    ["desc", "value", "date"].filter((k) => x && x[k]).map((k) => x[k]).join(" — ") +
-    (x && x.source ? ` [${x.source}]` : "");
-  const point = (x) => (x && x.point ? x.point + (x && x.source ? ` [${x.source}]` : "") : "");
+    ["desc", "value", "date"].filter((k) => x && x[k]).map((k) => x[k]).join(" — ");
+  const point = (x) => (x && x.point ? x.point : "");
   return [
     String(parsed.summary || ""),
     list(parsed.linkedCompanies, link),
