@@ -1502,10 +1502,10 @@ async function scrapeDetails(spreadsheetId, tabName, mode, maxRows, onProgress) 
       skipped++;
       continue;
     }
-    // Append mode re-run: a row whose detail block already has ANY data is treated
-// as scraped (prevents re-scraping all 75 rows just because one cell is blank).
-// Only rows whose detail cells are entirely empty get picked up again.
-    if (mode !== "replace" && row) {
+    // Append mode auto-run (limit 0 = all): skip rows that already have any detail
+    // data so re-runs only fill the rows that are still empty. With an explicit
+    // limit (e.g. 4) we force re-scrape those N rows regardless of existing data.
+    if (mode !== "replace" && !rowLimit && row) {
       const detailCells = row.slice(startCol, startCol + detailHeaders.length);
       const hasAny = detailCells.some((c) => String(c || "").trim() !== "");
       if (hasAny) {
