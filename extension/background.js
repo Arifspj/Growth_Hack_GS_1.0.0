@@ -449,27 +449,29 @@ async function snapshotCompanyPage(url) {
     const tab = await ensureScraperWindow();
     if (!tab) return null;
     await chrome.tabs.sendMessage(tab.id, { type: "goto", url: want }).catch(() => {});
-    const deadline = Date.now() + 16000;
+    const deadline = Date.now() + 25000;
     let first = true;
+    let lastHtml = null;
     while (Date.now() < deadline) {
-      await sleep(first ? 3500 : 1200);
+      await sleep(first ? 3500 : 1000);
       first = false;
       if (stopRequested) return null;
       const resp = await withTimeout(
         chrome.tabs.sendMessage(tab.id, { type: "extract_page" }).catch(() => null),
         5000
       ).catch(() => null);
-      if (
-        resp &&
-        resp.html &&
-        resp.href &&
-        String(resp.href).split("#")[0] === want &&
-        resp.html.length > 20000
-      ) {
-        return resp.html;
+      if (resp && resp.html && resp.href && String(resp.href).split("#")[0] === want) {
+        lastHtml = resp.html;
+        // Newer Screener pages render the top-ratios via JS/API (server HTML has
+        // empty <span class="number"></span>). Only accept once real numbers land,
+        // otherwise we'd snapshot the page before the data fills in.
+        if (resp.html.length > 20000 && topRatiosHaveValues(resp.html)) {
+          return resp.html;
+        }
       }
       if (stopRequested) return null;
     }
+    if (lastHtml && lastHtml.length > 20000 && topRatiosHaveValues(lastHtml)) return lastHtml;
     await destroyScraperWindow();
   }
   return null;
@@ -479,10 +481,17 @@ async function snapshotCompanyPage(url) {
 // with the logged-in session. Reading the live DOM via the hidden Screener window
 // reliably captures exactly what the user sees; public fetch is the last-resort fallback.
 async function fetchDetail(url) {
-  const html = await snapshotCompanyPage(url);
-  if (html) return { html, source: "tab-dom" };
-  const pub = await fetchWithRetry(url);
-  return { html: pub, source: "public" };
+  // Try consolidated first, fall back to the standalone (non-consolidated) page —
+  // some companies report standalone-only data, and on newer pages both load
+  // top-ratios via JS so we judge success by actual numbers being present.
+  const urlsToTry = [url, standaloneUrl(url)];
+  for (const u of urlsToTry) {
+    const html = await snapshotCompanyPage(u);
+    if (html) return { html, source: "tab-dom" };
+    const pub = await fetchWithRetry(u);
+    if (pub && topRatiosHaveValues(pub)) return { html: pub, source: "public" };
+  }
+  return { html: "", source: "none" };
 }
 
 function resolveNextPagination(html, currentUrl, page) {
@@ -1329,6 +1338,24 @@ function consolidatedUrl(link) {
   const m = u.match(/^(https?:\/\/[^/]+\/company\/[^/]+)/i);
   if (m) return m[1] + "/consolidated/";
   return u + "/consolidated/";
+}
+
+function standaloneUrl(link) {
+  let u = String(link || "").split("#")[0].replace(/\/+$/, "").replace(/\/+$/, "");
+  const m = u.match(/^(https?:\/\/[^/]+\/company\/[^/]+)(?:\/consolidated)?\/?$/i);
+  if (m) return m[1] + "/";
+  return u.replace(/\/consolidated\/?$/i, "") + "/";
+}
+
+// True when #top-ratios actually contains numeric values. Newer Screener pages
+// ship an empty <span class="number"></span> server-side and only fill the numbers
+// via JS/API after load; a page that still has empty number spans yields a blank
+// detail row, so we treat it as "not ready / no data".
+function topRatiosHaveValues(html) {
+  if (!html || html.length < 20000) return false;
+  const m = html.match(/<ul id="top-ratios"[\s\S]*?<\/ul>/i);
+  if (!m) return true; // no top-ratios block at all — don't block other parsers
+  return /<span class="number">\s*\d/.test(m[0]);
 }
 
 function parseAnnualTables(html) {
