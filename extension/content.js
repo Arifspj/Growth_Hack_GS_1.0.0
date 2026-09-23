@@ -213,7 +213,7 @@
     </div>
     <div class="sec">
       <div class="row between">
-        <span class="chk"><label style="margin:0 6px 0 0">Limit (0=all):</label><input type="number" id="limitInput" value="0" min="0" max="1000" style="width:64px"></span>
+        <span class="chk"><label style="margin:0 6px 0 0" title="Scrape = pages, Details/AI = rows. 0 = all.">Pages / Rows (0=all):</label><input type="number" id="limitInput" value="0" min="0" max="1000" style="width:64px"></span>
       </div>
       <div class="row" style="gap:8px;margin-top:8px">
         <button class="btn" id="stopBtn" disabled style="flex:1">Stop</button>
