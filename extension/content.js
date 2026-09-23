@@ -141,6 +141,8 @@
   button.btn:hover:not(:disabled) { background: #f1f5f9; border-color: #cbd5e1; transform: translateY(-1px); }
   button.btn:active:not(:disabled) { transform: translateY(0) scale(.97); }
   button.btn.primary { background: linear-gradient(135deg, #10b981, #059669); border: none; color: #fff; box-shadow: 0 2px 8px rgba(5, 150, 105, .35); }
+  button.btn.ai { background: linear-gradient(135deg, #6366f1, #4f46e5); border: none; color: #fff; box-shadow: 0 2px 8px rgba(79, 70, 229, .35); }
+  button.btn.ai:hover:not(:disabled) { filter: brightness(1.08); background: linear-gradient(135deg, #6366f1, #4f46e5); }
   button.btn.primary:hover:not(:disabled) { filter: brightness(1.06); background: linear-gradient(135deg, #10b981, #059669); }
   button.btn:disabled { opacity: .55; cursor: not-allowed; box-shadow: none; }
   .seg { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 10px 14px; background: #f6f8fa; border-top: 1px solid #eef1f4; border-bottom: 1px solid #eef1f4; }
@@ -165,12 +167,14 @@
 <div class="wrap">
   <div class="panel" id="panel">
     <div class="head">
-      <span class="t"><span class="dot"></span>Growth Hack GS <span class="sheetMeta" id="sheetInfo"></span></span>
+      <span class="t"><span class="dot"></span>Growth Hack GS AI <span class="sheetMeta" id="sheetInfo"></span></span>
       <span class="winbtn">
+        <button id="refreshBtn" title="Reload this sheet">&#10227;</button>
         <button id="mini" title="Minimize">&#8211;</button>
         <button id="maxi" title="Maximize">&#128470;</button>
       </span>
     </div>
+    <div class="diag" id="diag" style="display:none;font-size:10px;color:#b45309;background:#fef3c7;border-bottom:1px solid #fcd34d;padding:5px 14px"></div>
     <div class="sec">
       <label for="sheetId">Google Sheet URL or ID</label>
       <div class="row">
@@ -190,11 +194,13 @@
     </div>
     <div class="sec row between">
       <span class="chk"><label style="margin:0 6px 0 0">Pages (0=all):</label><input type="number" id="maxPages" value="0" min="0" max="500"></span>
+      <span class="chk"><label style="margin:0 6px 0 0">AI Rows (0=all):</label><input type="number" id="maxAiRows" value="25" min="0" max="1000"></span>
       <span class="row" style="gap:6px">
         <button class="btn" id="stopBtn" disabled>Stop</button>
         <button class="btn primary" id="scrapeAllBtn" disabled>Scrape All</button>
       </span>
     </div>
+    <div class="muted" style="margin:4px 14px 10px">AI button runs the first N rows through ChatGPT (web search ON) and writes the JSON reply into the "AI Research (JSON)" column.</div>
     <div class="seg">
       <span class="chk"><input type="checkbox" id="appendChk"> Append (keep rows)</span>
       <span class="chk"><input type="checkbox" id="replaceChk" checked> Replace tab</span>
@@ -242,6 +248,11 @@
   });
   root.getElementById("maxi").addEventListener("click", openPanel);
 
+  root.getElementById("refreshBtn").addEventListener("click", () => {
+    log("Reloading this sheet…");
+    location.reload();
+  });
+
   function log(msg, cls = "") {
     const div = document.createElement("div");
     if (cls) div.className = cls;
@@ -279,8 +290,23 @@
       dbtn.textContent = "Details";
       dbtn.title = "Extract per-row details from each company's consolidated page";
       dbtn.addEventListener("click", () => runDetails(item, dbtn, status));
-      row.append(labelSpan, status, btn, dbtn);
+      const abtn = document.createElement("button");
+      abtn.className = "btn ai";
+      abtn.textContent = "AI";
+      abtn.title = 'Run the first N rows through ChatGPT research and write the JSON into the "AI Research (JSON)" column';
+      abtn.addEventListener("click", () => runAiResearch(item, abtn, status));
+      const vTag = document.createElement("span");
+      vTag.className = "verTag";
+      vTag.textContent = "v1.0.5";
+      vTag.style.cssText = "display:none";
+      row.append(labelSpan, status, btn, dbtn, abtn, vTag);
       box.appendChild(row);
+    }
+    const diag = root.getElementById("diag");
+    if (diag) {
+      const aiBtns = [...box.querySelectorAll(".btn.ai")].length;
+      diag.style.display = "block";
+      diag.textContent = `v1.0.5 JS loaded | items: ${items.length} | AI buttons: ${aiBtns} | refresh: yes`;
     }
   }
 
@@ -330,6 +356,25 @@ function runDetails(item, btn, status) {
   });
 }
 
+function runAiResearch(item, btn, status) {
+  if (chosenMode() === "replace" && !window.confirm(`Replace the previous AI data of "${item.label}"? Existing cells will be cleared.`)) {
+    return;
+  }
+  btn.disabled = true;
+  updateItemButtons(item.label, true);
+  root.getElementById("stopBtn").disabled = false;
+  status.className = "status";
+  status.textContent = "starting…";
+  const v = parseInt(root.getElementById("maxAiRows").value, 10);
+  st.port.postMessage({
+    type: "ai_research",
+    spreadsheetId: st.spreadsheetId,
+    item,
+    mode: chosenMode(),
+    maxRows: Number.isFinite(v) && v > 0 ? v : 0,
+  });
+}
+
 function updateItemButtons(label, disabled) {
   const el = itemElByLabel(label);
   if (el) el.querySelectorAll("button").forEach((b) => (b.disabled = disabled));
@@ -365,10 +410,11 @@ function updateItemButtons(label, disabled) {
       } else if (msg.type === "complete") {
         const r = msg.result;
         if (r.filled != null) {
+          const what = r.ai ? "rows researched" : "rows filled";
           log(
             r.stopped
-              ? `Details stopped: ${r.filled}/${r.total} rows filled in "${r.tabName}"`
-              : `Details done: ${r.filled}/${r.total} rows filled in "${r.tabName}"`
+              ? `Details stopped: ${r.filled}/${r.total} ${what} in "${r.tabName}"`
+              : `Details done: ${r.filled}/${r.total} ${what} in "${r.tabName}"`
           );
         } else {
           log(
@@ -381,7 +427,9 @@ function updateItemButtons(label, disabled) {
         if (el) {
           const stEl = el.querySelector(".status");
           stEl.className = "status" + (r.stopped ? "" : " done");
-          stEl.textContent = (r.stopped ? "stopped " : "") + (r.filled != null ? `${r.filled} rows` : `${r.written} rows`);
+          stEl.textContent =
+            (r.stopped ? "stopped " : "") +
+            (r.filled != null && r.ai ? `${r.filled} rows researched` : r.filled != null ? `${r.filled} rows filled` : `${r.written} rows`);
           el.querySelectorAll("button").forEach((b) => (b.disabled = false));
         }
         root.getElementById("stopBtn").disabled = true;
