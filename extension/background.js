@@ -374,10 +374,31 @@ async function fetchScreener(url) {
 
 let scraperOpts = { winId: null, tabId: null };
 
+const SCRAPER_WIN_KEY = "scraperWindow";
+
+async function loadScraperWin() {
+  try {
+    const st = await chrome.storage.session.get([SCRAPER_WIN_KEY]);
+    const s = st && st[SCRAPER_WIN_KEY];
+    if (s && Number.isFinite(s.winId) && Number.isFinite(s.tabId)) {
+      scraperOpts = { winId: s.winId, tabId: s.tabId };
+    }
+  } catch {}
+}
+
+async function saveScraperWin() {
+  try {
+    await chrome.storage.session.set({ [SCRAPER_WIN_KEY]: { ...scraperOpts } });
+  } catch {}
+}
+
 async function destroyScraperWindow() {
   if (scraperOpts.winId != null) {
     await chrome.windows.remove(scraperOpts.winId).catch(() => {});
     scraperOpts = { winId: null, tabId: null };
+    try {
+      await chrome.storage.session.remove(SCRAPER_WIN_KEY);
+    } catch {}
   }
 }
 
@@ -388,6 +409,7 @@ async function rebuildScraperWindow() {
 
 // One hidden (minimized) Screener window reused for every company page.
 async function ensureScraperWindow(url = `${SCREENER_BASE}/`) {
+  await loadScraperWin();
   if (scraperOpts.winId != null) {
     const win = await chrome.windows.get(scraperOpts.winId, { populate: true }).catch(() => null);
     const tab = win && win.tabs && win.tabs[0];
@@ -401,6 +423,7 @@ async function ensureScraperWindow(url = `${SCREENER_BASE}/`) {
     .catch(() => null);
   if (!win || !win.tabs || !win.tabs[0]) return null;
   scraperOpts = { winId: win.id, tabId: win.tabs[0].id };
+  await saveScraperWin();
   await ensureContentScriptInjected(win.tabs[0].id);
   const st = await chrome.storage.local.get(["screenerEmail", "screenerPassword"]);
   if (st.screenerEmail && st.screenerPassword) {
