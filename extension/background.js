@@ -1788,10 +1788,11 @@ async function runAiResearch(spreadsheetId, tabName, mode, maxRows, onProgress) 
   onProgress({ type: "progress", status: "ai", label: tabName, message: `AI research queue: ${total} row(s). Each row takes ~20–90s.` });
 
   let filled = 0, failed = 0, skipped = 0;
-  for (let i = 0; i < targets.length; i++) {
-    if (stopRequested) break;
-    const t = targets[i];
-    onProgress({ type: "progress", status: "ai", label: tabName, message: `AI ${i + 1}/${total} — ${t.name} (fetching)…` });
+  const failures = [];
+
+  const processTarget = async (t, ordinal) => {
+    if (stopRequested) return "stopped";
+    onProgress({ type: "progress", status: "ai", label: tabName, message: `AI ${ordinal + 1}/${total} — ${t.name} (fetching)…` });
     let detail;
     try {
       const { html } = await fetchDetail(consolidatedUrl(t.link));
@@ -1813,26 +1814,58 @@ async function runAiResearch(spreadsheetId, tabName, mode, maxRows, onProgress) 
         aNet,
       };
     } catch (e) {
-      failed++;
-      onProgress({ type: "progress", status: "ai", label: tabName, message: `AI ${i + 1}/${total} — ${t.name}: fetch error ${e.message}` });
-      continue;
+      return { failed: true, error: `fetch error: ${e.message}` };
     }
     const prompt = buildAiResearchPrompt(detail);
-    onProgress({ type: "progress", status: "ai", label: tabName, message: `AI ${i + 1}/${total} — ${t.name} (ChatGPT researching…)` });
-    const res = await handleChatGptAsk(prompt, { webSearch: true });
-    if (stopRequested) break;
-    if (!res.success) {
-      failed++;
-      onProgress({ type: "progress", status: "ai", label: tabName, message: `AI ${i + 1}/${total} — ${t.name}: ${res.error}` });
-      if (failed >= 3) throw new Error(`ChatGPT kept failing: ${res.error}`);
-      continue;
-    }
+    onProgress({ type: "progress", status: "ai", label: tabName, message: `AI ${ordinal + 1}/${total} — ${t.name} (ChatGPT researching…)` });
+    const res = await Promise.race([
+      handleChatGptAsk(prompt, { webSearch: true }),
+      new Promise((_, rej) => setTimeout(() => rej(new Error("ChatGPT timeout (260s)")), 260000)),
+    ]);
+    if (stopRequested) return "stopped";
+    if (!res.success) return { failed: true, error: res.error };
     const parsed = extractAiJson(res.text);
     const cells = aiRowCells(parsed);
     if (!parsed && res.text) cells[0] = res.text;
-    await updateValues(spreadsheetId, `${rawTab}!${firstLetter}${t.gi + 1}:${lastLetter}${t.gi + 1}`, [cells]).catch((e) => { failed++; });
-    filled++;
-    onProgress({ type: "progress", status: "ai", label: tabName, message: `AI ${i + 1}/${total} — ${t.name}: done` });
+    try {
+      await updateValues(spreadsheetId, `${rawTab}!${firstLetter}${t.gi + 1}:${lastLetter}${t.gi + 1}`, [cells]);
+    } catch (e) {
+      return { failed: true, error: `sheet write: ${e.message}` };
+    }
+    return { ok: true };
+  };
+
+  // First pass: every row exactly once, never aborting on ChatGPT hiccups.
+  for (let i = 0; i < targets.length; i++) {
+    if (stopRequested) break;
+    const t = targets[i];
+    const r = await processTarget(t, i);
+    if (r === "stopped") break;
+    if (r.ok) {
+      filled++;
+      onProgress({ type: "progress", status: "ai", label: tabName, message: `AI ${i + 1}/${total} — ${t.name}: done` });
+    } else {
+      failed++;
+      failures.push({ t, ordinal: i, error: r.error });
+      onProgress({ type: "progress", status: "ai", label: tabName, message: `AI ${i + 1}/${total} — ${t.name}: ${r.error}` });
+    }
+  }
+
+  // Second pass: retry only the rows that failed, once each.
+  if (failures.length && !stopRequested) {
+    onProgress({ type: "progress", status: "ai", label: tabName, message: `Retrying ${failures.length} failed row(s)…` });
+    for (const f of failures) {
+      if (stopRequested) break;
+      const r = await processTarget(f.t, f.ordinal);
+      if (r === "stopped") break;
+      if (r.ok) {
+        failed--;
+        filled++;
+        onProgress({ type: "progress", status: "ai", label: tabName, message: `AI ${f.ordinal + 1}/${total} — ${f.t.name}: done (retry)` });
+      } else {
+        onProgress({ type: "progress", status: "ai", label: tabName, message: `AI ${f.ordinal + 1}/${total} — ${f.t.name}: still failing (${r.error})` });
+      }
+    }
   }
   const stopped = stopRequested;
   stopRequested = false;

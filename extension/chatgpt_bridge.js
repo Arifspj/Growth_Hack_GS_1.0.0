@@ -120,38 +120,32 @@
   }
 
   async function waitForCompletion(baselineText) {
-    const deadline = Date.now() + 120000;
+    const deadline = Date.now() + 240000;
     const stopBtnSel =
       "button[data-testid=\"stop-button\"], button[aria-label*=\"Stop generating\" i]";
-
-    // Phase 1: generation must actually START (stop button appears). If it never
-    // appears, the message likely wasn't sent — bail early instead of returning
-    // stale text (that was the "prompt sent twice / wrong data" bug).
-    let sawStop = false;
-    while (Date.now() < deadline) {
-      if (document.querySelector(stopBtnSel)) { sawStop = true; break; }
-      await sleep(700);
-    }
-
-    // Phase 2: once started, wait until it fully finishes (stop button gone),
-    // then require a FRESH answer that differs from the pre-send baseline.
     let lastText = "";
+    let stableSince = 0;
+    let everSeenFresh = false;
+
     while (Date.now() < deadline) {
       const stopBtn = document.querySelector(stopBtnSel);
       const txt = extractLastAnswer();
-      if (sawStop && !stopBtn && txt && txt !== baselineText) {
-        if (txt !== lastText) {
-          lastText = txt;
-          await sleep(1500);
-          continue;
-        }
-        return txt;
+      const fresh = !!txt && txt !== baselineText;
+      if (fresh && !everSeenFresh) {
+        everSeenFresh = true;
+        stableSince = Date.now();
+        lastText = txt;
+      } else if (fresh && txt !== lastText) {
+        lastText = txt;
+        stableSince = Date.now();
       }
-      if (txt) lastText = txt;
+      // Done = generation finished (no stop button) AND answer is fresh and stable.
+      const done = !stopBtn && everSeenFresh && Date.now() - stableSince >= 2500;
+      if (done) return txt;
       await sleep(800);
     }
-    // Timeout: only return text we actually saw change after our send.
-    return lastText && lastText !== baselineText ? lastText : "";
+    // Timeout: return whatever fresh text did stream in (never the stale baseline).
+    return everSeenFresh && lastText ? lastText : "";
   }
 
   window.__gptAssistant = {
