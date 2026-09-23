@@ -1499,6 +1499,15 @@ async function scrapeDetails(spreadsheetId, tabName, mode, onProgress) {
       skipped++;
       continue;
     }
+    // Append mode: skip rows whose detail cells are already fully populated so
+    // re-runs only re-scrape the rows that actually need data (empty/partial).
+    if (mode !== "replace" && row) {
+      const detailCells = row.slice(startCol, startCol + detailHeaders.length);
+      if (detailCells.length > 0 && detailCells.every((c) => String(c || "").trim() !== "")) {
+        skipped++;
+        continue;
+      }
+    }
     const url = consolidatedUrl(link);
     const name = String((row && row[1]) || link).trim();
     onProgress({
