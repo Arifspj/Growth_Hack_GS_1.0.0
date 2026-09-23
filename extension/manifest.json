@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "Growth Hack GS AI",
-  "version": "1.2.9",
+  "version": "1.2.10",
   "description": "Reads the Settings tab of a Google Sheet (labels in Column A, links in Column B), scrapes Screener.in pages, and writes the data into a matching tab (created if missing).",
   "permissions": ["tabs", "activeTab", "storage", "scripting"],
   "host_permissions": [

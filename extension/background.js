@@ -1662,13 +1662,39 @@ async function computeIntrinsic(spreadsheetId, tabName, mode, maxRows, onProgres
     }
     return best;
   };
-  const priceIdx = findCol(/^currentprice$/);
+  const priceCandidates = (() => {
+    const idxs = [];
+    for (let i = 0; i < grid[0].length; i++) if (/^currentprice$/.test(normLabel(grid[0][i]))) idxs.push(i);
+    return idxs;
+  })();
   const peIdx = findCol(/^stockpe$/);
   const bookIdx = findCol(/^bookvalue$/);
   const growthIdx = findCol(/^profitgrowth/);
   const linkIdx = findCol(/^link$/);
-  if (priceIdx < 0 || peIdx < 0) {
+  const epsIdx = findCol(/^eps$/);
+  if (!priceCandidates.length || peIdx < 0) {
     throw new Error(`Tab "${rawTab}" needs "Current Price" and "Stock P/E" columns — run Details first.`);
+  }
+  // Choose the Current Price column whose data is consistent with the sheet's own
+  // ratios: price ÷ P/E should roughly equal EPS. This picks the Details live
+  // price (e.g. ₹210) over unrelated duplicates (e.g. an IPO-list 429/572).
+  let priceIdx = priceCandidates[priceCandidates.length - 1];
+  if (epsIdx >= 0) {
+    let bestErr = Infinity;
+    for (const i of priceCandidates) {
+      let err = 0, n = 0;
+      for (let ri = 1; ri < Math.min(grid.length, 60); ri++) {
+        const p = toNum(grid[ri] && grid[ri][i]);
+        const pe = toNum(grid[ri] && grid[ri][peIdx]);
+        const e = toNum(grid[ri] && grid[ri][epsIdx]);
+        if (!isFinite(p) || !isFinite(pe) || !isFinite(e) || pe <= 0 || e === 0 || p <= 0) continue;
+        const implied = p / pe;
+        err += Math.abs(implied - e) / Math.abs(e);
+        n++;
+      }
+      const avgErr = n ? err / n : Infinity;
+      if (avgErr < bestErr) { bestErr = avgErr; priceIdx = i; }
+    }
   }
 
   // Append the two intrinsic columns at the very end (after AI columns).
