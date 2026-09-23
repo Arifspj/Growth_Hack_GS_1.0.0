@@ -138,6 +138,44 @@ async function clearValues(spreadsheetId, range) {
   return sheetsJson(`${spreadsheetId}/values/${qr(range)}:clear`, { method: "POST", body: { range } });
 }
 
+// Current grid size (rows x cols) of a tab, so clear/write ranges never exceed
+// the sheet's actual grid (clear fails with 400 "exceeds grid limits" otherwise).
+async function getSheetGridInfo(spreadsheetId, tabName) {
+  const meta = await getSpreadsheetMeta(spreadsheetId);
+  const sheet = (meta.sheets || []).find(
+    (s) => s.properties.title.toLowerCase() === String(tabName).toLowerCase()
+  );
+  if (!sheet) throw new Error(`Sheet "${tabName}" not found`);
+  const gp = sheet.properties.gridProperties || { rowCount: 1, columnCount: 1 };
+  return {
+    sheetId: sheet.properties.sheetId,
+    rowCount: Math.max(1, gp.rowCount || 1),
+    columnCount: Math.max(1, gp.columnCount || 1),
+  };
+}
+
+// Grow a tab's grid to the needed rows/columns (if already big enough, no-op).
+async function expandSheetGrid(spreadsheetId, tabName, { rows = 0, cols = 0 } = {}) {
+  const g = await getSheetGridInfo(spreadsheetId, tabName);
+  const rowCount = Math.max(g.rowCount, rows);
+  const columnCount = Math.max(g.columnCount, cols);
+  if (rowCount === g.rowCount && columnCount === g.columnCount) return g;
+  await sheetsJson(`${spreadsheetId}:batchUpdate`, {
+    method: "POST",
+    body: {
+      requests: [
+        {
+          updateSheetProperties: {
+            properties: { sheetId: g.sheetId, gridProperties: { rowCount, columnCount } },
+            fields: "gridProperties.rowCount,gridProperties.columnCount",
+          },
+        },
+      ],
+    },
+  });
+  return { sheetId: g.sheetId, rowCount, columnCount };
+}
+
 async function getSpreadsheetMeta(spreadsheetId) {
   return sheetsJson(`${spreadsheetId}`);
 }
@@ -1081,7 +1119,8 @@ async function scrapeToSheet(spreadsheetId, item, mode, maxPages, onProgress) {
         title = w.sheet.properties.title;
         created = w.created;
         if (created || mode === "replace") {
-          await clearValues(spreadsheetId, `${title}!A1:ZZ50000`);
+          const gi = await getSheetGridInfo(spreadsheetId, title);
+          await clearValues(spreadsheetId, `${title}!A1:${columnLetter(gi.columnCount)}${gi.rowCount}`);
         }
         if (created || mode === "replace") {
           const values = [headerRow, ...batch.rows.map((r) => r.values)];
@@ -1362,7 +1401,11 @@ async function scrapeDetails(spreadsheetId, tabName, mode, onProgress) {
   const lastLetter = columnLetter(startCol + detailHeaders.length);
   await updateValues(spreadsheetId, `${rawTab}!${firstLetter}1:${lastLetter}1`, [detailHeaders]);
   if (mode === "replace") {
-    await clearValues(spreadsheetId, `${rawTab}!${firstLetter}2:${lastLetter}20000`);
+    const gi = await expandSheetGrid(spreadsheetId, rawTab, {
+      rows: Math.max(grid.length + 1, 2),
+      cols: startCol + detailHeaders.length,
+    });
+    await clearValues(spreadsheetId, `${rawTab}!${firstLetter}2:${lastLetter}${gi.rowCount}`);
   }
 
   let filled = 0;
@@ -1676,8 +1719,15 @@ async function runAiResearch(spreadsheetId, tabName, mode, maxRows, onProgress) 
   let aiCol = headerRow.findIndex((h) => normLabel(h).indexOf("airesearch") === 0);
   if (aiCol < 0) aiCol = grid[0].length; // append after the last used column
   const aiLetter = columnLetter(aiCol + 1);
+  // Make sure the AI column actually exists in the sheet's grid before clearing/writing,
+  // otherwise clear/update on a column beyond grid limits fails with a 400.
+  const gi = await expandSheetGrid(spreadsheetId, rawTab, {
+    rows: Math.max(grid.length + 1, 2),
+    cols: aiCol + 1,
+  });
   if (mode === "replace") {
-    await clearValues(spreadsheetId, `${rawTab}!${aiLetter}2:${aiLetter}20000`);
+    // Clear only within the sheet's actual grid (rows = current grid height).
+    await clearValues(spreadsheetId, `${rawTab}!${aiLetter}2:${aiLetter}${gi.rowCount}`);
   }
   await updateValues(spreadsheetId, `${rawTab}!${aiLetter}1`, [[AI_HEADER]]);
 
