@@ -120,34 +120,77 @@
   }
 
   async function waitForCompletion(baselineText) {
-    const t0 = Date.now();
+    const deadline = Date.now() + 120000;
+    const stopBtnSel =
+      "button[data-testid=\"stop-button\"], button[aria-label*=\"Stop generating\" i]";
+
+    // Phase 1: generation must actually START (stop button appears). If it never
+    // appears, the message likely wasn't sent — bail early instead of returning
+    // stale text (that was the "prompt sent twice / wrong data" bug).
+    let sawStop = false;
+    while (Date.now() < deadline) {
+      if (document.querySelector(stopBtnSel)) { sawStop = true; break; }
+      await sleep(700);
+    }
+
+    // Phase 2: once started, wait until it fully finishes (stop button gone),
+    // then require a FRESH answer that differs from the pre-send baseline.
     let lastText = "";
-    while (Date.now() - t0 < 120000) {
-      const stopBtn = document.querySelector(
-        "button[data-testid=\"stop-button\"], button[aria-label*=\"Stop generating\" i]"
-      );
+    while (Date.now() < deadline) {
+      const stopBtn = document.querySelector(stopBtnSel);
       const txt = extractLastAnswer();
-      // Never return the pre-send answer (stale text left over from an earlier
-      // prompt/conversation) — only a fresh assistant reply that differs from it.
-      if (!stopBtn && txt && txt !== lastText && txt !== baselineText) {
-        await sleep(1500);
-        const txt2 = extractLastAnswer();
-        if (txt2 === txt && txt2.length > 0 && txt2 !== baselineText) return txt2;
-        lastText = txt;
-      } else if (txt) {
-        lastText = txt;
+      if (sawStop && !stopBtn && txt && txt !== baselineText) {
+        if (txt !== lastText) {
+          lastText = txt;
+          await sleep(1500);
+          continue;
+        }
+        return txt;
       }
+      if (txt) lastText = txt;
       await sleep(800);
     }
-    return extractLastAnswer() === baselineText ? "" : extractLastAnswer();
+    // Timeout: only return text we actually saw change after our send.
+    return lastText && lastText !== baselineText ? lastText : "";
   }
 
   window.__gptAssistant = {
+    queue: Promise.resolve(),
     ask: async (prompt, opts) => {
+      // Serialize everything on this tab: each __gptAsk runs only after the
+      // previous one fully finished, so two rows can never send together.
+      const run = window.__gptAssistant.queue.then(() =>
+        window.__gptAssistant._ask(prompt, opts)
+      );
+      window.__gptAssistant.queue = run.then(
+        () => {},
+        () => {}
+      );
+      return run;
+    },
+    _ask: async (prompt, opts) => {
       const useSearch = opts && opts.webSearch !== false;
       const composer = await waitForComposer();
       if (!composer)
         return { ok: false, error: "ChatGPT not ready. Please login and keep chatgpt.com open." };
+
+      // If a previous reply is still generating, wait for it to finish and for
+      // the send button to reappear. Sending mid-generation clicks the STOP
+      // button instead, which is exactly the "starts then stops" the user saw.
+      const waitSendIdle = async () => {
+        const t0 = Date.now();
+        while (Date.now() - t0 < 120000) {
+          const stopBtn = document.querySelector(
+            "button[data-testid=\"stop-button\"], button[aria-label*=\"Stop generating\" i]"
+          );
+          if (!stopBtn) return true;
+          await sleep(1200);
+        }
+        return false;
+      };
+      if (!(await waitSendIdle()))
+        return { ok: false, error: "ChatGPT is taking too long to finish the previous reply." };
+
       const baselineText = extractLastAnswer();
       if (useSearch) {
         try {
@@ -156,8 +199,22 @@
       }
       setComposer(composer, prompt);
       await sleep(500);
-      if (!clickSendButton())
-        return { ok: false, error: "Send button not found on chatgpt.com." };
+      // Only click send if our text actually landed in the composer.
+      const landed = (() => {
+        try {
+          return composer.innerText && composer.innerText.replace(/\s+/g, " ").trim().length > 5;
+        } catch (e) {
+          return true;
+        }
+      })();
+      if (!landed) return { ok: false, error: "Could not fill the ChatGPT composer." };
+      let clicked = false;
+      const t0 = Date.now();
+      while (Date.now() - t0 < 8000) {
+        if (clickSendButton()) { clicked = true; break; }
+        await sleep(600);
+      }
+      if (!clicked) return { ok: false, error: "Send button not found on chatgpt.com." };
       const text = await waitForCompletion(baselineText);
       if (!text) return { ok: false, error: "ChatGPT returned empty reply." };
       return { ok: true, text };
