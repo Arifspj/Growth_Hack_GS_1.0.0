@@ -1745,6 +1745,8 @@ async function runAiResearch(spreadsheetId, tabName, mode, maxRows, onProgress) 
   if (linkIdx < 0) {
     throw new Error(`Tab "${rawTab}" has no "Link" column — run the main scrape first.`);
   }
+  let nameIdx = headerRow.findIndex((h) => /company|name/i.test(normLabel(h)));
+  if (nameIdx < 0) nameIdx = 0; // fall back to Col A
   let aiCol = -1;
   for (let i = 0; i < headerRow.length; i++) {
     if (AI_COLUMNS.some((c) => normLabel(headerRow[i]) === normLabel(c) || normLabel(headerRow[i]).indexOf("ai ") === 0)) {
@@ -1777,7 +1779,7 @@ async function runAiResearch(spreadsheetId, tabName, mode, maxRows, onProgress) 
     const link = String((row && row[linkIdx]) || "").trim();
     if (!link) continue;
     if (mode !== "replace" && String(existing[gi] || "").trim()) continue; // already researched
-    targets.push({ gi, link, name: String((row && row[1]) || link).trim() });
+    targets.push({ gi, link, name: String((row && row[nameIdx]) || link).trim() });
   }
   const total = targets.length;
   onProgress({ type: "progress", status: "ai", label: tabName, message: `AI research queue: ${total} row(s). Each row takes ~20–90s.` });
