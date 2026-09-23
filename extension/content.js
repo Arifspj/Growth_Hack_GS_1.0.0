@@ -196,13 +196,15 @@
       </div>
       <div class="muted" id="loginState">Checking login…</div>
     </div>
-    <div class="sec row between">
-      <span class="chk"><label style="margin:0 6px 0 0">Pages (0=all):</label><input type="number" id="maxPages" value="0" min="0" max="500"></span>
-      <span class="chk"><label style="margin:0 6px 0 0">AI Rows (0=all):</label><input type="number" id="maxAiRows" value="25" min="0" max="1000"></span>
-      <span class="row" style="gap:6px">
-        <button class="btn" id="stopBtn" disabled>Stop</button>
-        <button class="btn primary" id="scrapeAllBtn" disabled>Scrape All</button>
-      </span>
+    <div class="sec">
+      <div class="row between">
+        <span class="chk"><label style="margin:0 6px 0 0">Pages (0=all):</label><input type="number" id="maxPages" value="0" min="0" max="500"></span>
+        <span class="chk"><label style="margin:0 6px 0 0">AI Rows (0=all):</label><input type="number" id="maxAiRows" value="25" min="0" max="1000"></span>
+      </div>
+      <div class="row" style="gap:8px;margin-top:8px">
+        <button class="btn" id="stopBtn" disabled style="flex:1">Stop</button>
+        <button class="btn primary" id="scrapeAllBtn" disabled style="flex:2">Scrape All</button>
+      </div>
     </div>
     <div class="muted" style="margin:4px 14px 10px">AI button adds the AI columns (Summary, Linked Companies, Big Orders, Catalysts, Risks), then runs the first N rows through ChatGPT (web search ON) and fills each column per row.</div>
     <div class="seg">
@@ -301,7 +303,7 @@
       abtn.addEventListener("click", () => runAiResearch(item, abtn, status));
       const vTag = document.createElement("span");
       vTag.className = "verTag";
-      vTag.textContent = "v1.0.5";
+      vTag.textContent = "v1.0.9";
       vTag.style.cssText = "display:none";
       row.append(labelSpan, status, btn, dbtn, abtn, vTag);
       box.appendChild(row);
@@ -310,7 +312,7 @@
     if (diag) {
       const aiBtns = [...box.querySelectorAll(".btn.ai")].length;
       diag.style.display = "block";
-      diag.textContent = `v1.0.5 JS loaded | items: ${items.length} | AI buttons: ${aiBtns} | refresh: yes`;
+      diag.textContent = `v1.0.9 JS loaded | items: ${items.length} | AI buttons: ${aiBtns} | refresh: yes`;
     }
   }
 
