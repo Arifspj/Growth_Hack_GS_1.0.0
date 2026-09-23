@@ -213,7 +213,7 @@
     </div>
     <div class="sec">
       <div class="row between">
-        <span class="chk"><label style="margin:0 6px 0 0" title="Scrape = pages, Details/AI = rows. 0 = all.">Pages / Rows (0=all):</label><input type="number" id="limitInput" value="0" min="0" max="1000" style="width:64px"></span>
+        <span class="chk"><label style="margin:0 6px 0 0" title="Scrape = pages (0 = all). Details/AI = rows. 0/all = everything; 4 = row 4; 4,7 = rows 4 & 7; 4-7 = rows 4..7; 4-7,9 = mixed.">Pages / Rows (0=all):</label><input type="text" id="limitInput" value="0" style="width:64px"></span>
       </div>
       <div class="row" style="gap:8px;margin-top:8px">
         <button class="btn" id="stopBtn" disabled style="flex:1">Stop</button>
@@ -340,8 +340,8 @@ function chosenMode() {
 }
 
 function limitFromInput() {
-  const v = parseInt(root.getElementById("limitInput").value, 10);
-  return Number.isFinite(v) && v > 0 ? v : 0;
+  const v = root.getElementById("limitInput").value.trim();
+  return v === "" ? "0" : v;
 }
 
 function runScrape(item, btn, status, fromAll) {

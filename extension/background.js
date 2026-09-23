@@ -1227,6 +1227,25 @@ const DETAIL_FIELDS = [
 ];
 
 const normLabel = (s) => String(s || "").toLowerCase().replace(/[^a-z0-9]/g, "");
+
+// Parse the Pages/Rows input as specific sheet rows: "4" → row 4, "4,7" → rows 4
+// & 7, "4-7" → rows 4..7, empty/"0" → null = all rows. Returns a Set of sheet
+// row numbers (1-based) or null for all.
+function parseRowSelector(value) {
+  const raw = String(value == null ? "" : value).trim();
+  if (!raw || raw === "0") return null;
+  const set = new Set();
+  for (const part of raw.split(",")) {
+    const p = part.trim();
+    if (!p) continue;
+    const m = p.match(/^(\d+)(?:\s*-\s*(\d+))?$/);
+    if (!m) continue;
+    const a = parseInt(m[1], 10);
+    const b = m[2] != null ? parseInt(m[2], 10) : a;
+    for (let i = Math.min(a, b); i <= Math.max(a, b); i++) set.add(i);
+  }
+  return set.size ? set : null;
+}
 // Normalize a table cell / header text so we can detect repeated header rows and
 // identify the company "Link" column regardless of whitespace/case/punctuation.
 const normCellKey = (s) => normLabel(s).replace(/^(sno?|sn|column)\w*$/, "sno");
@@ -1488,24 +1507,26 @@ async function scrapeDetails(spreadsheetId, tabName, mode, maxRows, onProgress) 
   };
 
   const total = grid.length - 1;
-  const rowLimit = Math.max(0, parseInt(maxRows, 10) || 0);
+  const rowsSet = parseRowSelector(maxRows);
   let n = 0;
   let processed = 0;
   for (let gi = 1; gi < grid.length; gi++) {
     if (stopRequested) break;
-    if (rowLimit && processed >= rowLimit) break;
     const row = grid[gi];
     n++;
     const sheetRow = gi + 1;
+    if (rowsSet && !rowsSet.has(sheetRow)) {
+      skipped++;
+      continue;
+    }
     const link = String((row && row[linkIdx]) || "").trim();
     if (!link) {
       skipped++;
       continue;
     }
-    // Append mode auto-run (limit 0 = all): skip rows that already have any detail
-    // data so re-runs only fill the rows that are still empty. With an explicit
-    // limit (e.g. 4) we force re-scrape those N rows regardless of existing data.
-    if (mode !== "replace" && !rowLimit && row) {
+    // Append mode auto-run (all rows): skip rows that already have any detail
+    // data so re-runs only fill the rows that are still empty.
+    if (mode !== "replace" && !rowsSet && row) {
       const detailCells = row.slice(startCol, startCol + detailHeaders.length);
       const hasAny = detailCells.some((c) => String(c || "").trim() !== "");
       if (hasAny) {
@@ -1513,7 +1534,6 @@ async function scrapeDetails(spreadsheetId, tabName, mode, maxRows, onProgress) 
         continue;
       }
     }
-    processed++;
     const url = consolidatedUrl(link);
     const name = String((row && row[1]) || link).trim();
     onProgress({
@@ -1850,16 +1870,17 @@ async function runAiResearch(spreadsheetId, tabName, mode, maxRows, onProgress) 
   }
   await updateValues(spreadsheetId, `${rawTab}!${firstLetter}1:${lastLetter}1`, [AI_COLUMNS]);
 
-  const limit = Number.isFinite(maxRows) && maxRows > 0 ? maxRows : 0; // 0 = all rows
+  const rowsSet = parseRowSelector(maxRows);
   const targets = [];
   const existing = grid.map((r) => r[aiCol] || "");
   for (let gi = 1; gi < grid.length; gi++) {
     if (stopRequested) break;
-    if (limit && targets.length >= limit) break;
     const row = grid[gi];
+    const sheetRow = gi + 1;
+    if (rowsSet && !rowsSet.has(sheetRow)) continue;
     const link = String((row && row[linkIdx]) || "").trim();
     if (!link) continue;
-    if (mode !== "replace" && String(existing[gi] || "").trim()) continue; // already researched
+    if (!rowsSet && mode !== "replace" && String(existing[gi] || "").trim()) continue; // already researched (all-mode only)
     targets.push({ gi, link, name: String((row && row[nameIdx]) || link).trim() });
   }
   const total = targets.length;
@@ -2109,7 +2130,7 @@ chrome.runtime.onConnect.addListener((port) => {
           msg.spreadsheetId,
           (msg.item && msg.item.label) || "",
           msg.mode || "replace",
-          Math.max(0, parseInt(msg.maxRows, 10) || 0),
+          String(msg.maxRows == null ? "" : msg.maxRows).trim(),
           (p) => port.postMessage(p)
         );
         port.postMessage({ type: "complete", result });
@@ -2119,7 +2140,7 @@ chrome.runtime.onConnect.addListener((port) => {
           msg.spreadsheetId,
           (msg.item && msg.item.label) || "",
           msg.mode || "replace",
-          Math.max(0, parseInt(msg.maxRows, 10) || 0),
+          String(msg.maxRows == null ? "" : msg.maxRows).trim(),
           (p) => port.postMessage(p)
         );
         port.postMessage({ type: "complete", result });

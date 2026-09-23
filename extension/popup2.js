@@ -125,8 +125,8 @@ function modalConfirm({ title, message, okLabel = "Replace", danger = true }) {
 }
 
 function limitFromInput() {
-  const v = parseInt($("limitInput").value, 10);
-  return Number.isFinite(v) && v > 0 ? v : 0;
+  const v = $("limitInput").value.trim();
+  return v === "" ? "0" : v;
 }
 
 async function runScrape(item, btn, status) {
