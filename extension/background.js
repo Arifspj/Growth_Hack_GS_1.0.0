@@ -1595,22 +1595,46 @@ const AI_COLUMNS = [
   "AI Risks",
 ];
 
-// ---------- Intrinsic Value (Graham) ----------
-// Computed purely from columns already in the sheet (EPS, Profit Growth, Current
-// Price), so no network/rows fetch is needed — the columns are auto-detected by
-// header name wherever they sit (Scrape/Details/AI can reorder columns).
+// ---------- Intrinsic Value (matches the reference project) ----------
+// Computed purely from columns already in the sheet — Current Price, Stock P/E,
+// Book Value, Profit Growth (auto-detected by header name wherever they sit,
+// since Scrape/Details/AI can reorder columns).
+//  EPS (implied)       = price / P/E
+//  Graham Number       = sqrt(22.5 x EPS x BVPS)
+//  Fair Value (growth) = EPS x max(8.5 + 2 x growth, 4)
+//  Intrinsic Value     = average of Graham Number + Fair Value
+//  Margin of Safety %  = (Intrinsic - price) / price x 100  -> 900 / -65 etc.
 const INTRINSIC_COLUMNS = ["Intrinsic Value", "Margin of Safety %"];
 
-// Graham: IV = EPS x (8.5 + 2 x growth). MoS% = (IV - price)/price x 100.
-// Returns the simple signed % number (e.g. 900, -65) — no sign/colour tag.
-function grahamCalc(eps, price, growth) {
-  const e = toNum(eps);
-  if (!isFinite(e)) return null;
-  const g = isFinite(toNum(growth)) ? toNum(growth) : 0;
-  const iv = e * (8.5 + 2 * g);
+function grahamCalc(price, pe, bookValue, growth) {
   const p = toNum(price);
-  const mos = isFinite(p) && p > 0 ? Math.round(((iv - p) / p) * 100) : null;
-  return { iv: Math.round(iv * 100) / 100, mos };
+  if (!isFinite(p) || p <= 0) return null;
+  const peNum = toNum(pe);
+  let eps = peNum > 0 ? p / peNum : null; // EPS implied by the market price / P/E
+  if (eps === null || eps <= 0) return null;
+
+  const bvps = toNum(bookValue);
+  let graham = null;
+  if (isFinite(bvps) && bvps > 0) {
+    graham = Math.sqrt(22.5 * eps * bvps);
+  }
+
+  let fairValue = null;
+  const g = toNum(growth);
+  if (isFinite(g)) {
+    const gc = Math.min(Math.max(g, -10), 35);
+    const fairPe = Math.max(8.5 + 2 * gc, 4);
+    fairValue = eps * fairPe;
+  }
+
+  const values = [];
+  if (graham !== null) values.push(graham);
+  if (fairValue !== null) values.push(fairValue);
+  if (!values.length) return null;
+
+  const composite = values.reduce((a, b) => a + b, 0) / values.length;
+  const mos = Math.round(((composite - p) / p) * 100);
+  return { iv: Math.round(composite * 100) / 100, mos };
 }
 
 async function computeIntrinsic(spreadsheetId, tabName, mode, maxRows, onProgress) {
@@ -1637,12 +1661,13 @@ async function computeIntrinsic(spreadsheetId, tabName, mode, maxRows, onProgres
     }
     return best;
   };
-  const epsIdx = findCol(/^eps$/);
   const priceIdx = findCol(/^currentprice$/);
+  const peIdx = findCol(/^stockpe$/);
+  const bookIdx = findCol(/^bookvalue$/);
   const growthIdx = findCol(/^profitgrowth/);
   const linkIdx = findCol(/^link$/);
-  if (epsIdx < 0 || priceIdx < 0) {
-    throw new Error(`Tab "${rawTab}" needs "EPS" and "Current Price" columns — run Details first.`);
+  if (priceIdx < 0 || peIdx < 0) {
+    throw new Error(`Tab "${rawTab}" needs "Current Price" and "Stock P/E" columns — run Details first.`);
   }
 
   // Append the two intrinsic columns at the very end (after AI columns).
@@ -1680,7 +1705,12 @@ async function computeIntrinsic(spreadsheetId, tabName, mode, maxRows, onProgres
     const link = String((row && (linkIdx >= 0 ? row[linkIdx] : row[1])) || "").trim();
     if (!link) { skipped++; continue; }
     if (!rowsSet && mode !== "replace" && String(existing[gi] || "").trim()) { skipped++; continue; }
-    const calc = grahamCalc(row && row[epsIdx], row && row[priceIdx], growthIdx >= 0 ? row && row[growthIdx] : "");
+    const calc = grahamCalc(
+      row && row[priceIdx],
+      row && row[peIdx],
+      bookIdx >= 0 ? row && row[bookIdx] : "",
+      growthIdx >= 0 ? row && row[growthIdx] : ""
+    );
     if (!calc) { failed++; continue; }
     pending.set(sheetRow, [calc.iv, calc.mos]);
     filled++;
