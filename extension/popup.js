@@ -66,7 +66,12 @@ function renderItems() {
     dbtn.textContent = "Details";
     dbtn.title = "Extract per-row details from each company's consolidated page";
     dbtn.addEventListener("click", () => runDetails(item, dbtn, status));
-    row.append(labelSpan, status, btn, dbtn, urlSpan);
+    const abtn = document.createElement("button");
+    abtn.className = "btn ai";
+    abtn.textContent = "AI";
+    abtn.title = 'Run the first N rows through ChatGPT research and write the JSON into the "AI Research (JSON)" column';
+    abtn.addEventListener("click", () => runAiResearch(item, abtn, status));
+    row.append(labelSpan, status, btn, dbtn, abtn, urlSpan);
     box.appendChild(row);
   }
 }
@@ -143,7 +148,7 @@ async function runDetails(item, btn, status) {
     chosenMode() === "replace" &&
     !(await modalConfirm({
       title: `Replace detail columns of "${item.label}"?`,
-      message: `The detail columns (${itemsDetailHeaders(item).join(", ")}) for "${item.label}" will be cleared and refilled. Continue?`,
+      message: `The detail columns (Market Cap, Current Price, etc.) for "${item.label}" will be cleared and refilled. Continue?`,
       okLabel: "Replace Details",
     }))
   ) {
@@ -159,6 +164,22 @@ async function runDetails(item, btn, status) {
     spreadsheetId: state.spreadsheetId,
     item,
     mode: chosenMode(),
+  });
+}
+
+async function runAiResearch(item, btn, status) {
+  btn.disabled = true;
+  setItemBusy(item.label, true);
+  $("stopBtn").disabled = false;
+  status.className = "status";
+  status.textContent = "starting...";
+  const v = parseInt($("maxAiRows").value, 10);
+  port.postMessage({
+    type: "ai_research",
+    spreadsheetId: state.spreadsheetId,
+    item,
+    mode: chosenMode(),
+    maxRows: Number.isFinite(v) && v > 0 ? v : 0,
   });
 }
 
@@ -230,9 +251,10 @@ function init() {
     } else if (msg.type === "complete") {
       const r = msg.result;
       if (r.filled != null) {
+        const what = r.ai ? "rows researched" : "rows filled";
         log(
-          (r.stopped ? "Details stopped: " : "Details done: ") +
-            `${r.filled}/${r.total} rows filled in "${r.tabName}".`,
+          (r.stopped ? "Stopped: " : "Done: ") +
+            `${r.filled}/${r.total} ${what} in "${r.tabName}".`,
           r.stopped ? "" : "done"
         );
       } else {
@@ -246,7 +268,11 @@ function init() {
       if (itemEl2) {
         const st = itemEl2.querySelector(".status");
         st.className = "status" + (r.stopped ? "" : " done");
-        st.textContent = (r.stopped ? "stopped " : "") + (r.filled != null ? `${r.filled} rows` : `${r.written} rows`);
+        if (r.filled != null) {
+          st.textContent = (r.stopped ? "stopped " : "") + `${r.filled} rows${r.ai ? " researched" : " filled"}`;
+        } else {
+          st.textContent = (r.stopped ? "stopped " : "") + `${r.written} rows`;
+        }
         itemEl2.querySelectorAll("button").forEach((b) => (b.disabled = false));
       }
       $("stopBtn").disabled = true;

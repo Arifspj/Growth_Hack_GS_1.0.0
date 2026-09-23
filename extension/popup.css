@@ -95,6 +95,14 @@ input[type="number"] {
 .btn.primary:hover:not(:disabled) {
   background: #267a45;
 }
+.btn.ai {
+  background: #5b2bd6;
+  border-color: #5b2bd6;
+  color: #fff;
+}
+.btn.ai:hover:not(:disabled) {
+  background: #4a21b8;
+}
 .btn:disabled {
   opacity: 0.5;
   cursor: not-allowed;

@@ -8,7 +8,9 @@
     "https://*.screener.in/*",
     "https://screener.in/*",
     "https://oauth2.googleapis.com/*",
-    "https://*.googleapis.com/*"
+    "https://*.googleapis.com/*",
+    "https://chatgpt.com/*",
+    "https://*.chatgpt.com/*"
   ],
   "background": {
     "service_worker": "background.js",

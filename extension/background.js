@@ -1443,6 +1443,310 @@ async function scrapeDetails(spreadsheetId, tabName, mode, onProgress) {
   return { tabName: rawTab, filled, skipped, failed, total, stopped };
 }
 
+// ---------- AI Research (ChatGPT) ----------
+const AI_HEADER = "AI Research (JSON)";
+
+// Company profile block: <div class="company-profile"> with an "About" div and
+// a "Key Points" commentary block of <p> paragraphs (optional <strong> title).
+function parseCompanyProfile(html) {
+  const out = { about: "", keyPoints: [] };
+  const aboutM = html.match(
+    /<div class="sub[^"]*\babout\b[^"]*"[^>]*><p>([\s\S]*?)<\/p><\/div>/i
+  );
+  if (aboutM) out.about = cellText(aboutM[1]).trim();
+  // Commentary ("Key Points") runs up to the "Read More" button that follows it.
+  const commentM = html.match(
+    /<div class="sub[^"]*\bcommentary\b[^"]*"[^>]*>([\s\S]*?)<\/button>/i
+  ) || html.match(
+    /<div class="sub[^"]*\bcommentary\b[^"]*"[^>]*>([\s\S]*?)<\/div>/i
+  );
+  if (commentM) {
+    const pRe = /<p>([\s\S]*?)<\/p>/gi;
+    let pm;
+    while ((pm = pRe.exec(commentM[1]))) {
+      const p = pm[1];
+      const strong = p.match(/<strong>(.*?)<\/strong>/i);
+      const title = strong ? cellText(strong[1]).replace(/[:\s]+$/, "") : "";
+      const bodyText = strong ? p.replace(strong[0], "") : p;
+      const text = cellText(bodyText).replace(/^[\s.,;:-]+|[\s.,;:-]+$/g, "").trim();
+      if (text && text.length > 5) out.keyPoints.push({ title, text });
+    }
+  }
+  return out;
+}
+
+// Pros & Cons: <section id="analysis"> holds <div class="pros"> / <div class="cons">.
+function parseProsCons(html) {
+  const out = { pros: [], cons: [] };
+  const sec = html.match(/<section id="analysis"[\s\S]*?<\/section>/i);
+  if (!sec) return out;
+  const collect = (cls, target) => {
+    const block = sec[0].match(new RegExp(`<div class="${cls}"[^>]*>([\\s\\S]*?)<\\/div>`, "i"));
+    if (!block) return;
+    const liRe = /<li>([\s\S]*?)<\/li>/gi;
+    let m;
+    while ((m = liRe.exec(block[1]))) {
+      const t = cellText(m[1]).trim();
+      if (t) target.push(t);
+    }
+  };
+  collect("pros", out.pros);
+  collect("cons", out.cons);
+  return out;
+}
+
+// Pull a numeric row (e.g. "Net Profit") from a section like #quarters or
+// #profit-loss, newest period = last entry. Values that aren't numeric are dropped.
+function parseNetProfitSeries(html, sectionId) {
+  const sec = html.match(new RegExp(`<section id="${sectionId}"[\\s\\S]*?<\\/section>`, "i"));
+  if (!sec) return [];
+  for (const tbl of parseTables(sec[0])) {
+    const row = tbl.rows.find((r) => /net\s*profit|profit\s*after\s*tax/i.test(String(r.arrows[0] || "")));
+    if (!row) continue;
+    const out = [];
+    for (let i = 1; i < row.arrows.length; i++) {
+      const n = parseFloat(String(row.arrows[i] || "").replace(/[^\d.-]/g, ""));
+      if (Number.isFinite(n)) out.push(n);
+    }
+    if (out.length) return out;
+  }
+  return [];
+}
+
+const nullNum = (v) => {
+  const n = parseFloat(String(v || "").replace(/[^\d.-]/g, ""));
+  return Number.isFinite(n) ? n : null;
+};
+
+const buildAiResearchPrompt = (d) => {
+  const qNet = (d.qNet || []).filter((v) => v !== null);
+  const aNet = (d.aNet || []).filter((v) => v !== null);
+  const qoQ =
+    qNet.length >= 2 && qNet[qNet.length - 2] !== 0
+      ? ((qNet[qNet.length - 1] - qNet[qNet.length - 2]) / Math.abs(qNet[qNet.length - 2])) * 100
+      : null;
+  const yoY =
+    aNet.length >= 2 && aNet[aNet.length - 2] !== 0
+      ? ((aNet[aNet.length - 1] - aNet[aNet.length - 2]) / Math.abs(aNet[aNet.length - 2])) * 100
+      : null;
+  const kps = (d.keyPoints || []).map((k) => (k.title ? k.title + ": " : "") + k.text);
+  const rows = [
+    "Act as a senior equity research analyst. Your job: quickly find the STOCK STORY / TRIGGER in plain language for a retail investor. FOCUS ON: (1) which big company, group, customer or supplier this stock is actually LINKED to and WHY it matters (e.g. \"Azaad Engineering makes jet-engine airfoil blades and supplies Boeing\" - that is exactly the kind of linkage insight we want); (2) the BIG ORDER / major win with value & date if available; (3) the single strongest near-term TRIGGER with the logic behind it. Keep it short and punchy, like a hot tip summary.",
+    "",
+    "Base data from screener.in:",
+    "Company: " + d.name,
+    d.price != null ? "Current Price: Rs " + d.price : null,
+    d.pe != null ? "Current P/E: " + Number(d.pe).toFixed(1) : null,
+    d.mcap ? "Market Cap: " + d.mcap : null,
+    d.about ? "About: " + d.about : null,
+    kps.length ? "Key Points: " + kps.join(" | ") : null,
+    d.pros.length ? "Pros: " + d.pros.join("; ") : null,
+    d.cons.length ? "Cons: " + d.cons.join("; ") : null,
+    qNet.length ? "Quarterly Net Profit (recent " + qNet.length + "): " + qNet.map((v) => v.toFixed(1)).join(", ") : null,
+    aNet.length ? "Annual Net Profit: " + aNet.map((v) => v.toFixed(1)).join(", ") : null,
+    qoQ != null ? "QoQ Net Profit growth: " + qoQ.toFixed(1) + "%" : null,
+    yoY != null ? "YoY Net Profit growth: " + yoY.toFixed(1) + "%" : null,
+    "",
+    "WEB RESEARCH (search the whole internet: latest news, BSE/NSE announcements, company and promoter-group IR pages, Reuters, MarketScreener, BazaarWatch, screener.in, credible market coverage):",
+    "- Check who the company supplies to, takes orders from, is part of which group, and who controls it (promoter / parent).",
+    "- Look for major recent orders, contracts and wins (value + date when known).",
+    "- Identify the single biggest near-term catalyst/trigger and the top risks. Add a real source URL where possible; if you cannot confirm a fact, say so instead of guessing.",
+    "",
+    "CONCISENESS RULES (VERY IMPORTANT):",
+    "- summary: MAX 2 sentences, plain language.",
+    "- Every bullet: ONE SHORT line, MAX 15 words. No paragraphs, no date ranges in text, no extra explanation sentences.",
+    "- MAX 4 items per array. If nothing major found, keep the array short or empty.",
+    "",
+    "OUTPUT RULES (STRICT):",
+    "- Reply with ONLY ONE valid JSON object. Nothing before and nothing after it.",
+    "- Do NOT use markdown code fences (no ```) and do NOT append any footnote / link list after the JSON.",
+    '- Exact shape:',
+    '{"summary":"\u22642 short sentences","linkedCompanies":[{"name":"company/group","relation":"how linked, one short line","source":"url if any else blank"}],"bigOrders":[{"desc":"what won, one short line","value":"value if known else blank","date":"when if known else blank","source":"url if any else blank"}],"catalysts":[{"point":"trigger with logic, one short line","source":"url if any else blank"}],"risks":[{"point":"risk, one short line","source":"url if any else blank"}]}',
+  ];
+  return rows.filter((r) => r !== null && r !== "").join("\n");
+};
+
+// Pull clean JSON out of ChatGPT's reply (handles ``` fences and trailing prose).
+function extractAiJson(text) {
+  const clean = (s) =>
+    s
+      .replace(/[\r\n]+/g, " ")
+      .replace(/,\s*([}\]])/g, "$1")
+      .replace(/\s+/g, " ");
+  const extractJson = (s) => {
+    const start = s.indexOf("{");
+    if (start === -1) return null;
+    let depth = 0, inStr = false, esc = false;
+    for (let i = start; i < s.length; i++) {
+      const ch = s[i];
+      if (esc) { esc = false; continue; }
+      if (ch === "\\") { esc = true; continue; }
+      if (inStr) { if (ch === '"') inStr = false; continue; }
+      if (ch === '"') { inStr = true; continue; }
+      if (ch === "{") depth++;
+      else if (ch === "}") {
+        depth--;
+        if (depth === 0) return s.slice(start, i + 1);
+      }
+    }
+    return null;
+  };
+  const str = String(text || "");
+  const candidates = [];
+  const fenced = str.match(/```(?:json)?\s*([\s\S]*?)```/i);
+  if (fenced) candidates.push(fenced[1]);
+  const extracted = extractJson(str);
+  if (extracted) candidates.push(extracted);
+  candidates.push(str);
+  for (const c of candidates) {
+    const variants = c.trim() ? [c.trim(), clean(c)] : [];
+    for (const v of variants) {
+      try {
+        const obj = JSON.parse(v);
+        if (obj && typeof obj === "object" && !Array.isArray(obj)) return obj;
+      } catch (e) {}
+    }
+  }
+  return null;
+}
+
+async function findOrOpenChatGptTab() {
+  const existing = await chrome.tabs.query({ url: ["https://chatgpt.com/*"] });
+  if (existing && existing.length) return existing[0];
+  return await chrome.tabs.create({ url: "https://chatgpt.com/", active: false });
+}
+
+function getActiveTab() {
+  return chrome.tabs.query({ active: true, lastFocusedWindow: true }).then((t) => (t && t[0]) || null);
+}
+
+async function ensureGptBridgeReady(tabId, timeoutMs = 60000) {
+  const t0 = Date.now();
+  while (Date.now() - t0 < timeoutMs) {
+    try {
+      const res = await chrome.tabs.sendMessage(tabId, { action: "__gptGetBridge" });
+      if (res && res.ready) return true;
+    } catch (e) {}
+    try {
+      await chrome.scripting.executeScript({ target: { tabId }, files: ["chatgpt_bridge.js"] });
+    } catch (e) {}
+    await sleep(800);
+  }
+  return false;
+}
+
+// Drive one research pass: focus a chatgpt.com tab, inject the bridge, send the
+// prompt (web search ON), wait for the answer, then restore the user's tab.
+async function handleChatGptAsk(prompt, opts) {
+  const prevTab = await getActiveTab();
+  const tab = await findOrOpenChatGptTab();
+  try {
+    const win = await chrome.windows.get(tab.windowId);
+    await chrome.windows.update(win.id, { focused: true });
+    await chrome.tabs.update(tab.id, { active: true });
+  } catch (e) {}
+  const restoreTab = async () => {
+    if (prevTab && prevTab.id !== tab.id) {
+      try { await chrome.tabs.update(prevTab.id, { active: true }); } catch (e) {}
+    }
+  };
+  const ready = await ensureGptBridgeReady(tab.id);
+  if (!ready) {
+    await restoreTab();
+    return { success: false, error: 'ChatGPT page not ready. Please open chatgpt.com and login in Chrome, then try again.' };
+  }
+  const res = await chrome.tabs.sendMessage(tab.id, { action: "__gptAsk", prompt, opts }).catch(() => null);
+  await restoreTab();
+  if (res && res.ok) return { success: true, text: res.text };
+  return { success: false, error: (res && res.error) || "ChatGPT did not respond." };
+}
+
+// Read the tab's rows (Link + Company), run up to maxRows of them through ChatGPT,
+// and write the returned JSON into the "AI Research (JSON)" column.
+async function runAiResearch(spreadsheetId, tabName, mode, maxRows, onProgress) {
+  const rawTab = tabName;
+  onProgress({ type: "progress", status: "ai", label: tabName, message: `Reading rows from "${rawTab}"…` });
+  const grid = await getValues(spreadsheetId, `${rawTab}!A1:ZZ20000`);
+  if (!grid.length) throw new Error(`Tab "${rawTab}" is empty — run the main scrape first.`);
+  const headerRow = grid[0];
+  const linkIdx = headerRow.findIndex((h) => normLabel(h) === "link");
+  if (linkIdx < 0) {
+    throw new Error(`Tab "${rawTab}" has no "Link" column — run the main scrape first.`);
+  }
+  let aiCol = headerRow.findIndex((h) => normLabel(h).indexOf("airesearch") === 0);
+  if (aiCol < 0) aiCol = grid[0].length; // append after the last used column
+  const aiLetter = columnLetter(aiCol + 1);
+  if (mode === "replace") {
+    await clearValues(spreadsheetId, `${rawTab}!${aiLetter}2:${aiLetter}20000`);
+  }
+  await updateValues(spreadsheetId, `${rawTab}!${aiLetter}1`, [[AI_HEADER]]);
+
+  const limit = Number.isFinite(maxRows) && maxRows > 0 ? maxRows : 0; // 0 = all rows
+  const targets = [];
+  const existing = grid.map((r) => r[aiCol] || "");
+  for (let gi = 1; gi < grid.length; gi++) {
+    if (stopRequested) break;
+    if (limit && targets.length >= limit) break;
+    const row = grid[gi];
+    const link = String((row && row[linkIdx]) || "").trim();
+    if (!link) continue;
+    if (mode !== "replace" && String(existing[gi] || "").trim()) continue; // already researched
+    targets.push({ gi, link, name: String((row && row[1]) || link).trim() });
+  }
+  const total = targets.length;
+  onProgress({ type: "progress", status: "ai", label: tabName, message: `AI research queue: ${total} row(s). Each row takes ~20–90s.` });
+
+  let filled = 0, failed = 0, skipped = 0;
+  for (let i = 0; i < targets.length; i++) {
+    if (stopRequested) break;
+    const t = targets[i];
+    onProgress({ type: "progress", status: "ai", label: tabName, message: `AI ${i + 1}/${total} — ${t.name} (fetching)…` });
+    let detail;
+    try {
+      const { html } = await fetchDetail(consolidatedUrl(t.link));
+      const top = parseTopRatios(html);
+      const prof = parseCompanyProfile(html);
+      const pc = parseProsCons(html);
+      const qNet = parseNetProfitSeries(html, "quarters");
+      const aNet = parseNetProfitSeries(html, "profit-loss");
+      detail = {
+        name: t.name,
+        price: nullNum(top["currentprice"]),
+        pe: nullNum(top["stockpe"]),
+        mcap: top["marketcap"] || "",
+        about: prof.about,
+        keyPoints: prof.keyPoints,
+        pros: pc.pros,
+        cons: pc.cons,
+        qNet,
+        aNet,
+      };
+    } catch (e) {
+      failed++;
+      onProgress({ type: "progress", status: "ai", label: tabName, message: `AI ${i + 1}/${total} — ${t.name}: fetch error ${e.message}` });
+      continue;
+    }
+    const prompt = buildAiResearchPrompt(detail);
+    onProgress({ type: "progress", status: "ai", label: tabName, message: `AI ${i + 1}/${total} — ${t.name} (ChatGPT researching…)` });
+    const res = await handleChatGptAsk(prompt, { webSearch: true });
+    if (stopRequested) break;
+    if (!res.success) {
+      failed++;
+      onProgress({ type: "progress", status: "ai", label: tabName, message: `AI ${i + 1}/${total} — ${t.name}: ${res.error}` });
+      if (failed >= 3) throw new Error(`ChatGPT kept failing: ${res.error}`);
+      continue;
+    }
+    const parsed = extractAiJson(res.text);
+    const cell = parsed ? JSON.stringify(parsed) : res.text;
+    await updateValues(spreadsheetId, `${rawTab}!${aiLetter}${t.gi + 1}`, [[cell]]).catch((e) => { failed++; });
+    filled++;
+    onProgress({ type: "progress", status: "ai", label: tabName, message: `AI ${i + 1}/${total} — ${t.name}: done` });
+  }
+  const stopped = stopRequested;
+  stopRequested = false;
+  return { tabName: rawTab, filled, failed, skipped, total, stopped, ai: true };
+}
+
 // ---------- Screener login ----------
 const SCREENER_BASE = "https://www.screener.in";
 
@@ -1550,6 +1854,26 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
     sendResponse({ ok: true });
     return false;
   }
+  if (msg && msg.action === "chatgptAsk") {
+    handleChatGptAsk(msg.prompt, msg.opts)
+      .then((res) => sendResponse(res))
+      .catch((err) => sendResponse({ success: false, error: String((err && err.message) || err) }));
+    return true;
+  }
+  if (msg && msg.action === "openChatgpt") {
+    (async () => {
+      try {
+        const tab = await findOrOpenChatGptTab();
+        const win = await chrome.windows.get(tab.windowId);
+        await chrome.windows.update(win.id, { focused: true });
+        await chrome.tabs.update(tab.id, { active: true });
+        sendResponse({ success: true, url: tab.url });
+      } catch (e) {
+        sendResponse({ success: false, error: String((e && e.message) || e) });
+      }
+    })();
+    return true;
+  }
   return false;
 });
 
@@ -1576,6 +1900,16 @@ chrome.runtime.onConnect.addListener((port) => {
           msg.spreadsheetId,
           (msg.item && msg.item.label) || "",
           msg.mode || "replace",
+          (p) => port.postMessage(p)
+        );
+        port.postMessage({ type: "complete", result });
+      } else if (msg.type === "ai_research") {
+        stopRequested = false;
+        const result = await runAiResearch(
+          msg.spreadsheetId,
+          (msg.item && msg.item.label) || "",
+          msg.mode || "replace",
+          Math.max(0, parseInt(msg.maxRows, 10) || 0),
           (p) => port.postMessage(p)
         );
         port.postMessage({ type: "complete", result });

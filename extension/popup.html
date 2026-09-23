@@ -36,11 +36,13 @@
     </div>
     <div class="row between">
       <label>Pages (0=all): <input type="number" id="maxPages" value="0" min="0" max="500" style="width:64px"></label>
+      <label>AI Rows (0=all): <input type="number" id="maxAiRows" value="25" min="0" max="1000" style="width:64px"></label>
       <div class="row">
         <button id="stopBtn" class="btn" disabled>Stop</button>
         <button id="scrapeAllBtn" class="btn primary" disabled>Scrape All</button>
       </div>
     </div>
+    <div class="muted" style="margin-top:6px">AI button runs the first N rows through ChatGPT (web search ON) and writes the JSON reply into the "AI Research (JSON)" column.</div>
   </section>
 
   <section id="itemsWrap" hidden>
