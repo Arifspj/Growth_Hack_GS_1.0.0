@@ -359,6 +359,20 @@ function init() {
     $("appendChk").checked = !e.target.checked;
   });
 
+  $("refreshBtn").addEventListener("click", async () => {
+    try {
+      const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+      if (tab && tab.id != null) {
+        await chrome.tabs.reload(tab.id);
+        log("Reloading current page...");
+      } else {
+        log("No active tab to reload.", "error");
+      }
+    } catch (err) {
+      log("Refresh failed: " + err.message, "error");
+    }
+  });
+
   (async () => {
     const saved = await chrome.storage.local.get(["screenerEmail", "screenerRemember"]);
     if (saved.screenerEmail) $("loginEmail").value = saved.screenerEmail;

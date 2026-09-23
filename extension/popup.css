@@ -114,8 +114,8 @@ input[type="number"] {
 .item {
   display: flex;
   align-items: center;
-  justify-content: space-between;
-  gap: 8px;
+  flex-wrap: wrap;
+  gap: 6px 8px;
   padding: 6px 4px;
   border-bottom: 1px solid #f0f1f3;
 }
@@ -128,7 +128,7 @@ input[type="number"] {
 }
 .item-label {
   font-weight: 600;
-  flex: 1;
+  flex: 1 1 100%;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
