@@ -213,8 +213,7 @@
     </div>
     <div class="sec">
       <div class="row between">
-        <span class="chk"><label style="margin:0 6px 0 0">Pages (0=all):</label><input type="number" id="maxPages" value="0" min="0" max="500"></span>
-        <span class="chk"><label style="margin:0 6px 0 0">AI Rows (0=all):</label><input type="number" id="maxAiRows" value="25" min="0" max="1000"></span>
+        <span class="chk"><label style="margin:0 6px 0 0">Limit (0=all):</label><input type="number" id="limitInput" value="0" min="0" max="1000" style="width:64px"></span>
       </div>
       <div class="row" style="gap:8px;margin-top:8px">
         <button class="btn" id="stopBtn" disabled style="flex:1">Stop</button>
@@ -340,8 +339,8 @@ function chosenMode() {
   return root.getElementById("replaceChk").checked ? "replace" : "append";
 }
 
-function pagesFromInput() {
-  const v = parseInt(root.getElementById("maxPages").value, 10);
+function limitFromInput() {
+  const v = parseInt(root.getElementById("limitInput").value, 10);
   return Number.isFinite(v) && v > 0 ? v : 0;
 }
 
@@ -360,7 +359,7 @@ function runScrape(item, btn, status, fromAll) {
     spreadsheetId: st.spreadsheetId,
     item,
     mode,
-    maxPages: pagesFromInput(),
+    maxPages: limitFromInput(),
   });
   void fromAll;
 }
@@ -379,6 +378,7 @@ function runDetails(item, btn, status) {
     spreadsheetId: st.spreadsheetId,
     item,
     mode: chosenMode(),
+    maxRows: limitFromInput(),
   });
 }
 
@@ -391,13 +391,12 @@ function runAiResearch(item, btn, status) {
   root.getElementById("stopBtn").disabled = false;
   status.className = "status";
   status.textContent = "starting…";
-  const v = parseInt(root.getElementById("maxAiRows").value, 10);
   st.port.postMessage({
     type: "ai_research",
     spreadsheetId: st.spreadsheetId,
     item,
     mode: chosenMode(),
-    maxRows: Number.isFinite(v) && v > 0 ? v : 0,
+    maxRows: limitFromInput(),
   });
 }
 

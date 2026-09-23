@@ -1382,7 +1382,7 @@ function extractDetails(html) {
   });
 }
 
-async function scrapeDetails(spreadsheetId, tabName, mode, onProgress) {
+async function scrapeDetails(spreadsheetId, tabName, mode, maxRows, onProgress) {
   const rateDelay = 400; // ms between fetched rows, to respect Screener rate limits
   const rawTab = tabName;
   onProgress({
@@ -1488,9 +1488,12 @@ async function scrapeDetails(spreadsheetId, tabName, mode, onProgress) {
   };
 
   const total = grid.length - 1;
+  const rowLimit = Math.max(0, parseInt(maxRows, 10) || 0);
   let n = 0;
+  let processed = 0;
   for (let gi = 1; gi < grid.length; gi++) {
     if (stopRequested) break;
+    if (rowLimit && processed >= rowLimit) break;
     const row = grid[gi];
     n++;
     const sheetRow = gi + 1;
@@ -1508,6 +1511,7 @@ async function scrapeDetails(spreadsheetId, tabName, mode, onProgress) {
         continue;
       }
     }
+    processed++;
     const url = consolidatedUrl(link);
     const name = String((row && row[1]) || link).trim();
     onProgress({
@@ -2103,6 +2107,7 @@ chrome.runtime.onConnect.addListener((port) => {
           msg.spreadsheetId,
           (msg.item && msg.item.label) || "",
           msg.mode || "replace",
+          Math.max(0, parseInt(msg.maxRows, 10) || 0),
           (p) => port.postMessage(p)
         );
         port.postMessage({ type: "complete", result });

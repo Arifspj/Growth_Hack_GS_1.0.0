@@ -124,6 +124,11 @@ function modalConfirm({ title, message, okLabel = "Replace", danger = true }) {
   });
 }
 
+function limitFromInput() {
+  const v = parseInt($("limitInput").value, 10);
+  return Number.isFinite(v) && v > 0 ? v : 0;
+}
+
 async function runScrape(item, btn, status) {
   const mode = chosenMode();
   if (
@@ -141,13 +146,12 @@ async function runScrape(item, btn, status) {
   $("stopBtn").disabled = false;
   status.className = "status";
   status.textContent = "starting...";
-  const v = parseInt($("maxPages").value, 10);
   port.postMessage({
     type: "scrape",
     spreadsheetId: state.spreadsheetId,
     item,
     mode,
-    maxPages: Number.isFinite(v) && v > 0 ? v : 0,
+    maxPages: limitFromInput(),
   });
 }
 
@@ -172,6 +176,7 @@ async function runDetails(item, btn, status) {
     spreadsheetId: state.spreadsheetId,
     item,
     mode: chosenMode(),
+    maxRows: limitFromInput(),
   });
 }
 
@@ -181,13 +186,12 @@ async function runAiResearch(item, btn, status) {
   $("stopBtn").disabled = false;
   status.className = "status";
   status.textContent = "starting...";
-  const v = parseInt($("maxAiRows").value, 10);
   port.postMessage({
     type: "ai_research",
     spreadsheetId: state.spreadsheetId,
     item,
     mode: chosenMode(),
-    maxRows: Number.isFinite(v) && v > 0 ? v : 0,
+    maxRows: limitFromInput(),
   });
 }
 
