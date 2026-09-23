@@ -80,7 +80,7 @@ function renderItems() {
     const aiBtns = [...box.querySelectorAll(".btn.ai")].length;
     const rf = !!$("refreshBtn") && !!$("refreshBtn2");
     diag.hidden = false;
-    diag.textContent = `v1.0.4 JS loaded | items: ${cnt} | AI buttons: ${aiBtns} | refresh: ${rf ? "yes" : "no"}`;
+    diag.textContent = `v1.0.5 JS loaded | items: ${cnt} | AI buttons: ${aiBtns} | refresh: ${rf ? "yes" : "no"}`;
   }
 }
 
