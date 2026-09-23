@@ -1650,14 +1650,15 @@ async function computeIntrinsic(spreadsheetId, tabName, mode, maxRows, onProgres
     if (!idxs.length) return -1;
     if (idxs.length === 1) return idxs[0];
     // Multiple identical headers (e.g. two "Current Price"): pick the one that
-    // actually has numeric data in the data rows.
+    // actually has numeric data in the data rows. When the data density ties,
+    // prefer the later column (Details' live Current Price over the IPO-list one).
     let best = idxs[0], bestN = -1;
     for (const i of idxs) {
       let n = 0;
       for (let ri = 1; ri < Math.min(grid.length, 60); ri++) {
         if (isFinite(toNum(grid[ri] && grid[ri][i]))) n++;
       }
-      if (n > bestN) { bestN = n; best = i; }
+      if (n > bestN || (n === bestN && i > best)) { bestN = n; best = i; }
     }
     return best;
   };
