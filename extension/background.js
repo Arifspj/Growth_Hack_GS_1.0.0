@@ -1899,14 +1899,67 @@ const nullNum = (v) => {
   return Number.isFinite(n) ? n : null;
 };
 
+// Build the AI detail straight from the already-scraped sheet row (CMP/P-E/Mar-Cap/
+// NP/ROCE/Debt/Prom. columns written by the main scrape). Returns an empty-ish
+// object when the row has no numbers so the caller knows to fall back to fetching.
+function detailFromRow(headers, row) {
+  const get = (k) => {
+    for (let i = 0; i < headers.length; i++) {
+      if (normLabel(headers[i]) === normLabel(k)) return String(row[i] == null ? "" : row[i]).trim();
+    }
+    return "";
+  };
+  const raw = {
+    name: get("Company") || get("Name"),
+    price: get("CMP Rs.") || get("CMP (Rs.)"),
+    pe: get("P/E") || get("PE"),
+    mcap: get("Mar Cap Rs.Cr.") || get("Market Cap (Rs.Cr.)"),
+    npQtr: get("NP Qtr Rs.Cr.") || get("NP Qtr (Rs.Cr.)"),
+    qtrVar: get("Qtr Profit Var %") || get("Qtr Profit Var (%)"),
+    profitGrowth: get("Profit growth %") || get("Profit Growth %"),
+    salesGrowth: get("Sales growth %") || get("Sales Growth %"),
+    roce: get("ROCE %") || get("ROCE (%)"),
+    debt: get("Debt Rs.Cr.") || get("Debt (Rs.Cr.)"),
+    prom: get("Prom. Hold. %") || get("Prom Holder %"),
+    earningsYield: get("Earnings Yield %") || get("Earnings Yield (%)"),
+    link: get("Link"),
+  };
+  const price = nullNum(raw.price);
+  const pe = nullNum(raw.pe);
+  const npQtr = nullNum(raw.npQtr);
+  const detail = {
+    name: raw.name,
+    price,
+    pe,
+    mcap: raw.mcap,
+    about: "",
+    keyPoints: [],
+    pros: [],
+    cons: [],
+    qNet: npQtr != null ? [npQtr] : [],
+    aNet: [],
+    qoQ: nullNum(raw.qtrVar),
+    yoY: nullNum(raw.profitGrowth),
+    salesGrowth: nullNum(raw.salesGrowth),
+    roce: nullNum(raw.roce),
+    debt: nullNum(raw.debt),
+    prom: nullNum(raw.prom),
+    earningsYield: nullNum(raw.earningsYield),
+    link: raw.link,
+  };
+  return detail;
+}
+
 const buildAiResearchPrompt = (d) => {
   const qNet = (d.qNet || []).filter((v) => v !== null);
   const aNet = (d.aNet || []).filter((v) => v !== null);
   const qoQ =
+    d.qoQ != null ? d.qoQ :
     qNet.length >= 2 && qNet[qNet.length - 2] !== 0
       ? ((qNet[qNet.length - 1] - qNet[qNet.length - 2]) / Math.abs(qNet[qNet.length - 2])) * 100
       : null;
   const yoY =
+    d.yoY != null ? d.yoY :
     aNet.length >= 2 && aNet[aNet.length - 2] !== 0
       ? ((aNet[aNet.length - 1] - aNet[aNet.length - 2]) / Math.abs(aNet[aNet.length - 2])) * 100
       : null;
@@ -1915,10 +1968,17 @@ const buildAiResearchPrompt = (d) => {
     "Act as a senior equity research analyst. Your job: quickly find the STOCK STORY / TRIGGER in plain language for a retail investor. FOCUS ON: (1) which big company, group, customer or supplier this stock is actually LINKED to and WHY it matters (e.g. \"Azaad Engineering makes jet-engine airfoil blades and supplies Boeing\" - that is exactly the kind of linkage insight we want); (2) the BIG ORDER / major win with value & date if available; (3) the single strongest near-term TRIGGER with the logic behind it. Keep it short and punchy, like a hot tip summary.",
     "",
     "Base data from screener.in:",
-    "Company: " + d.name,
+    "Company: " + d.name + (d.link ? "  (" + d.link + ")" : ""),
     d.price != null ? "Current Price: Rs " + d.price : null,
     d.pe != null ? "Current P/E: " + Number(d.pe).toFixed(1) : null,
     d.mcap ? "Market Cap: " + d.mcap : null,
+    d.salesGrowth != null ? "Sales growth: " + d.salesGrowth.toFixed(1) + "%" : null,
+    d.qoQ != null ? "QoQ Net Profit growth (from sheet): " + d.qoQ.toFixed(1) + "%" : null,
+    d.yoY != null ? "YoY Net Profit growth (from sheet): " + d.yoY.toFixed(1) + "%" : null,
+    d.roce != null ? "ROCE: " + d.roce.toFixed(1) + "%" : null,
+    d.prom != null ? "Promoter holding: " + d.prom.toFixed(1) + "%" : null,
+    d.debt != null ? "Debt: Rs " + d.debt + " Cr" : null,
+    d.earningsYield != null ? "Earnings Yield: " + d.earningsYield.toFixed(1) + "%" : null,
     d.about ? "About: " + d.about : null,
     kps.length ? "Key Points: " + kps.join(" | ") : null,
     d.pros.length ? "Pros: " + d.pros.join("; ") : null,
@@ -2111,7 +2171,7 @@ async function runAiResearch(spreadsheetId, tabName, mode, maxRows, onProgress) 
     const link = String((row && row[linkIdx]) || "").trim();
     if (!link) continue;
     if (!rowsSet && mode !== "replace" && String(existing[gi] || "").trim()) continue; // already researched (all-mode only)
-    targets.push({ gi, link, name: String((row && row[nameIdx]) || link).trim() });
+    targets.push({ gi, link, name: String((row && row[nameIdx]) || link).trim(), row: row || [] });
   }
   const total = targets.length;
   onProgress({ type: "progress", status: "ai", label: tabName, message: `AI research queue: ${total} row(s). Each row takes ~20–90s.` });
@@ -2121,30 +2181,39 @@ async function runAiResearch(spreadsheetId, tabName, mode, maxRows, onProgress) 
 
   const processTarget = async (t, ordinal) => {
     if (stopRequested) return "stopped";
-    onProgress({ type: "progress", status: "ai", label: tabName, done: ordinal + 1, total, message: `AI ${ordinal + 1}/${total} — ${t.name} (fetching)…` });
-    let detail;
-    try {
-      const { html } = await fetchDetailAi(consolidatedUrl(t.link));
-      const top = parseTopRatios(html);
-      const prof = parseCompanyProfile(html);
-      const pc = parseProsCons(html);
-      const qNet = parseNetProfitSeries(html, "quarters");
-      const aNet = parseNetProfitSeries(html, "profit-loss");
-      detail = {
-        name: t.name,
-        price: nullNum(top["currentprice"]),
-        pe: nullNum(top["stockpe"]),
-        mcap: top["marketcap"] || "",
-        about: prof.about,
-        keyPoints: prof.keyPoints,
-        pros: pc.pros,
-        cons: pc.cons,
-        qNet,
-        aNet,
-      };
-    } catch (e) {
-      return { failed: true, error: `fetch error: ${e.message}` };
+    onProgress({ type: "progress", status: "ai", label: tabName, done: ordinal + 1, total, message: `AI ${ordinal + 1}/${total} — ${t.name} (building prompt)…` });
+    // Primary: build the detail from the sheet row itself (the main scrape
+    // already wrote CMP/P-E/Mar Cap/NP/ROCE/Debt/Prom etc. there). This is
+    // instant — no network. ChatGPT is given the Link and does its own web
+    // research (screener.in + news) for the narrative columns.
+    let detail = detailFromRow(headerRow, t.row);
+    let fetched = false;
+    // Fallback: if the row has almost no numbers, try a fast public fetch to
+    // enrich price/PE/mcap/net-profit. Never blocks the run on snapshot.
+    if (!detail.price && !detail.pe && !detail.mcap) {
+      try {
+        const { html } = await fetchDetailAi(consolidatedUrl(t.link));
+        const top = parseTopRatios(html);
+        const prof = parseCompanyProfile(html);
+        const pc = parseProsCons(html);
+        const qNet = parseNetProfitSeries(html, "quarters");
+        const aNet = parseNetProfitSeries(html, "profit-loss");
+        if (!detail.price) detail.price = nullNum(top["currentprice"]);
+        if (!detail.pe) detail.pe = nullNum(top["stockpe"]);
+        if (!detail.mcap) detail.mcap = top["marketcap"] || "";
+        if (!detail.about) detail.about = prof.about;
+        if (!detail.keyPoints.length) detail.keyPoints = prof.keyPoints;
+        if (!detail.pros.length) detail.pros = pc.pros;
+        if (!detail.cons.length) detail.cons = pc.cons;
+        if (!detail.qNet.length) detail.qNet = qNet;
+        if (!detail.aNet.length) detail.aNet = aNet;
+        fetched = true;
+      } catch (e) {
+        // network failed — sheet data is already good enough to continue
+      }
     }
+    void fetched;
+    detail.link = t.link;
     const prompt = buildAiResearchPrompt(detail);
     onProgress({ type: "progress", status: "ai", label: tabName, done: ordinal + 1, total, message: `AI ${ordinal + 1}/${total} — ${t.name} (ChatGPT researching…)` });
     let res;
