@@ -203,11 +203,8 @@ function renderItems() {
   }
   const diag = $("diag");
   if (diag) {
-    const cnt = items.length;
-    const aiBtns = [...box.querySelectorAll(".btn.ai")].length;
-    const rf = !!$("refreshBtn") && !!$("refreshBtn2");
-    diag.hidden = false;
-    diag.textContent = `v1.0.5 JS loaded | items: ${cnt} | AI buttons: ${aiBtns} | refresh: ${rf ? "yes" : "no"}`;
+    diag.hidden = true;
+    diag.textContent = "";
   }
 }
 

@@ -253,8 +253,7 @@ let label;
         <button class="btn" id="stopBtn" disabled style="flex:1">Stop</button>
         <button class="btn primary" id="scrapeAllBtn" disabled style="flex:2">Scrape All</button>
       </div>
-    </div>
-    <div class="muted" style="margin:4px 14px 10px">AI button adds the AI columns (Summary, Linked Companies, Big Orders, Catalysts, Risks), then runs the first N rows through ChatGPT (web search ON) and fills each column per row.</div>
+</div>
     <div class="seg">
       <span class="chk"><input type="checkbox" id="appendChk" checked> Append (keep rows)</span>
       <span class="chk"><input type="checkbox" id="replaceChk"> Replace tab</span>
@@ -366,11 +365,10 @@ let label;
       row.append(labelSpan, status, btn, dbtn, abtn, ivBtn, vTag);
       box.appendChild(row);
     }
-    const diag = root.getElementById("diag");
+const diag = root.getElementById("diag");
     if (diag) {
-      const aiBtns = [...box.querySelectorAll(".btn.ai")].length;
-      diag.style.display = "block";
-      diag.textContent = `v1.0.9 JS loaded | items: ${items.length} | AI buttons: ${aiBtns} | refresh: yes`;
+      diag.style.display = "none";
+      diag.textContent = "";
     }
   }
 
