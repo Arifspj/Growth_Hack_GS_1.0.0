@@ -5,6 +5,37 @@ const DEFAULT_SHEET =
 let port = null;
 let state = { settings: null, spreadsheetId: null };
 let scrapingAll = false;
+const eta = { start: 0, done: 0, total: 0 };
+
+function updateStopEta(done, total) {
+  const btn = $("stopBtn");
+  if (!btn || btn.disabled) return;
+  if (!total || done < 1) {
+    btn.textContent = "Stop";
+    return;
+  }
+  if (!eta.start) eta.start = Date.now();
+  const elapsed = Date.now() - eta.start;
+  const rate = elapsed / Math.max(1, done);
+  const rem = Math.max(0, (total - done) * rate) / 1000;
+  let label;
+  if (rem < 90) label = `${Math.max(1, Math.round(rem))}s`;
+  else if (rem < 5400) label = `${Math.max(1, Math.round(rem / 60))}m`;
+  else {
+    const h = Math.floor(rem / 3600);
+    const m = Math.round((rem % 3600) / 60);
+    label = m === 60 ? `${h + 1}.00hr` : `${h}.${String(m).padStart(2, "0")}hr`;
+  }
+  btn.textContent = `Stop (${label})`;
+}
+
+function resetStopEta() {
+  eta.start = 0;
+  eta.done = 0;
+  eta.total = 0;
+  const btn = $("stopBtn");
+  if (btn) btn.textContent = "Stop";
+}
 
 let _resend = null;
 function onBgMessage(msg) {
@@ -16,6 +47,11 @@ function onBgMessage(msg) {
     renderItems();
     $("controls").hidden = false;
   } else if (msg.type === "progress") {
+    if (msg.done != null && msg.total) {
+      eta.total = msg.total;
+      eta.done = Math.max(eta.done, msg.done);
+      updateStopEta(msg.done, msg.total);
+    }
     if (msg.label) {
       const itemEl = [...document.querySelectorAll(".item")].find(
         (el) => el.querySelector(".item-label").textContent === msg.label
@@ -54,6 +90,7 @@ function onBgMessage(msg) {
       itemEl2.querySelectorAll("button").forEach((b) => (b.disabled = false));
     }
     $("stopBtn").disabled = true;
+    resetStopEta();
     if (!scrapingAll) setTimeout(() => loadSheet(state.spreadsheetId), 1500);
   } else if (msg.type === "stopped") {
     log("Stop requested — finishing the current row then stopping.");
@@ -61,6 +98,7 @@ function onBgMessage(msg) {
     log("Error: " + msg.error, "error");
     [...document.querySelectorAll(".item button")].forEach((b) => (b.disabled = false));
     $("stopBtn").disabled = true;
+    resetStopEta();
   } else if (msg.type === "login_result" || msg.type === "login_check") {
     setLoginState(msg);
   }
@@ -233,6 +271,7 @@ async function runScrape(item, btn, status) {
   btn.disabled = true;
   setItemBusy(item.label, true);
   $("stopBtn").disabled = false;
+  resetStopEta();
   status.className = "status";
   status.textContent = "starting...";
   send({
@@ -258,6 +297,7 @@ async function runDetails(item, btn, status) {
   btn.disabled = true;
   setItemBusy(item.label, true);
   $("stopBtn").disabled = false;
+  resetStopEta();
   status.className = "status";
   status.textContent = "starting...";
   send({
@@ -273,6 +313,7 @@ async function runAiResearch(item, btn, status) {
   btn.disabled = true;
   setItemBusy(item.label, true);
   $("stopBtn").disabled = false;
+  resetStopEta();
   status.className = "status";
   status.textContent = "starting...";
   send({
@@ -288,6 +329,7 @@ async function runIntrinsic(item, btn, status) {
   btn.disabled = true;
   setItemBusy(item.label, true);
   $("stopBtn").disabled = false;
+  resetStopEta();
   status.className = "status";
   status.textContent = "starting...";
   send({

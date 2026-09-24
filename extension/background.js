@@ -1143,6 +1143,8 @@ async function scrapeToSheet(spreadsheetId, item, mode, maxPages, onProgress) {
         status: "fetch",
         label: item.label,
         page: p.page,
+        done: p.page,
+        total: p.totalPages,
         message: `Page ${p.page}${p.totalPages ? `/${p.totalPages}` : ""}${p.totalResults ? ` (${p.totalResults} results)` : ""} — ${p.pageUrl}`,
       }),
     async (batch) => {
@@ -1563,12 +1565,14 @@ async function scrapeDetails(spreadsheetId, tabName, mode, maxRows, onProgress) 
     }
     const url = consolidatedUrl(link);
     const name = String((row && row[1]) || link).trim();
-    onProgress({
-      type: "progress",
-      status: "details",
-      label: tabName,
-      message: `Details ${n}/${total} — ${name}`,
-    });
+onProgress({
+        type: "progress",
+        status: "details",
+        label: tabName,
+        done: n,
+        total,
+        message: `Details ${n}/${total} — ${name}`,
+      });
     try {
       const { html, source } = await fetchDetail(url);
       if (stopRequested) break;
@@ -1581,6 +1585,8 @@ async function scrapeDetails(spreadsheetId, tabName, mode, maxRows, onProgress) 
           type: "progress",
           status: "details",
           label: tabName,
+          done: n,
+          total,
           message: `Details ${n}/${total} — ${name} (network fallback — cannot open logged-in page, some ratios may be missing)`,
         });
       }
@@ -1772,6 +1778,8 @@ async function computeIntrinsic(spreadsheetId, tabName, mode, maxRows, onProgres
       type: "progress",
       status: "intrinsic",
       label: tabName,
+      done: sheetRow,
+      total,
       message: `Intrinsic ${sheetRow}/${total} — IV ${calc.iv}${calc.mos != null ? `, MoS ${calc.mos}%` : ""}`,
     });
     if (pending.size >= 20) await flush();
@@ -2078,7 +2086,7 @@ async function runAiResearch(spreadsheetId, tabName, mode, maxRows, onProgress) 
 
   const processTarget = async (t, ordinal) => {
     if (stopRequested) return "stopped";
-    onProgress({ type: "progress", status: "ai", label: tabName, message: `AI ${ordinal + 1}/${total} — ${t.name} (fetching)…` });
+    onProgress({ type: "progress", status: "ai", label: tabName, done: ordinal + 1, total, message: `AI ${ordinal + 1}/${total} — ${t.name} (fetching)…` });
     let detail;
     try {
       const { html } = await fetchDetail(consolidatedUrl(t.link));
@@ -2103,7 +2111,7 @@ async function runAiResearch(spreadsheetId, tabName, mode, maxRows, onProgress) 
       return { failed: true, error: `fetch error: ${e.message}` };
     }
     const prompt = buildAiResearchPrompt(detail);
-    onProgress({ type: "progress", status: "ai", label: tabName, message: `AI ${ordinal + 1}/${total} — ${t.name} (ChatGPT researching…)` });
+    onProgress({ type: "progress", status: "ai", label: tabName, done: ordinal + 1, total, message: `AI ${ordinal + 1}/${total} — ${t.name} (ChatGPT researching…)` });
     let res;
     try {
       res = await Promise.race([

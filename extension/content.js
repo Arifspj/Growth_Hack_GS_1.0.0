@@ -96,7 +96,7 @@
   if (!curSheet || curSheet !== DEFAULT_SHEET) return;
 
   // ---------- floating widget ----------
-  const st = { settings: null, spreadsheetId: null, port: null, pinned: false };
+  const st = { settings: null, spreadsheetId: null, port: null, pinned: false, etaStart: 0, etaDone: 0, etaTotal: 0 };
 
   const host = document.createElement("div");
   host.id = "screener-sheets-fab";
@@ -109,6 +109,38 @@
       .replace(/</g, "&lt;")
       .replace(/>/g, "&gt;")
       .replace(/"/g, "&quot;");
+
+  function updateStopEta(done, total) {
+    const btn = root.getElementById("stopBtn");
+    if (!btn || btn.disabled) return;
+    if (!total || done < 1) {
+      btn.textContent = "Stop";
+      return;
+    }
+    if (!st.etaStart) st.etaStart = Date.now();
+    const now = Date.now();
+    const elapsed = now - st.etaStart;
+    const rate = elapsed / Math.max(1, done);
+    const remainMs = Math.max(0, (total - done) * rate);
+    const rem = remainMs / 1000;
+let label;
+    if (rem < 90) label = `${Math.max(1, Math.round(rem))}s`;
+    else if (rem < 5400) label = `${Math.max(1, Math.round(rem / 60))}m`;
+    else {
+      const h = Math.floor(rem / 3600);
+      const m = Math.round((rem % 3600) / 60);
+      label = m === 60 ? `${h + 1}.00hr` : `${h}.${String(m).padStart(2, "0")}hr`;
+    }
+    btn.textContent = `Stop (${label})`;
+  }
+
+  function resetStopEta() {
+    st.etaStart = 0;
+    st.etaDone = 0;
+    st.etaTotal = 0;
+    const btn = root.getElementById("stopBtn");
+    if (btn) btn.textContent = "Stop";
+  }
 
   root.innerHTML = `
 <style>
@@ -380,6 +412,7 @@ function runScrape(item, btn, status, fromAll) {
   btn.disabled = true;
   updateItemButtons(item.label, true);
   root.getElementById("stopBtn").disabled = false;
+  resetStopEta();
   status.className = "status";
   status.textContent = "starting…";
   sendToBg({
@@ -399,6 +432,7 @@ function runDetails(item, btn, status) {
   btn.disabled = true;
   updateItemButtons(item.label, true);
   root.getElementById("stopBtn").disabled = false;
+  resetStopEta();
   status.className = "status";
   status.textContent = "starting…";
   sendToBg({
@@ -417,6 +451,7 @@ function runAiResearch(item, btn, status) {
   btn.disabled = true;
   updateItemButtons(item.label, true);
   root.getElementById("stopBtn").disabled = false;
+  resetStopEta();
   status.className = "status";
   status.textContent = "starting…";
   sendToBg({
@@ -435,6 +470,7 @@ function runIntrinsic(item, btn, status) {
   btn.disabled = true;
   updateItemButtons(item.label, true);
   root.getElementById("stopBtn").disabled = false;
+  resetStopEta();
   status.className = "status";
   status.textContent = "starting…";
   sendToBg({
@@ -493,6 +529,11 @@ function updateItemButtons(label, disabled) {
         log(`Settings tab "${msg.settings.settingsSheet}" → ${msg.settings.items.length} item(s).`);
         renderItems();
       } else if (msg.type === "progress") {
+        if (msg.done != null && msg.total) {
+          st.etaTotal = msg.total;
+          st.etaDone = Math.max(st.etaDone, msg.done);
+          updateStopEta(msg.done, msg.total);
+        }
         if (msg.label) {
           const el = itemElByLabel(msg.label);
           if (el) el.querySelector(".status").textContent = msg.message || "…";
@@ -524,12 +565,14 @@ function updateItemButtons(label, disabled) {
           el.querySelectorAll("button").forEach((b) => (b.disabled = false));
         }
         root.getElementById("stopBtn").disabled = true;
+        resetStopEta();
       } else if (msg.type === "stopped") {
         log("Stop requested — finishing the current row then stopping.");
       } else if (msg.type === "error") {
         log("Error: " + msg.error, "err");
         root.getElementById("items").querySelectorAll(".item button").forEach((b) => (b.disabled = false));
         root.getElementById("stopBtn").disabled = true;
+        resetStopEta();
         const el = itemElByLabel(msg.label);
         if (el) el.querySelector(".status").textContent = "error";
       } else if (msg.type === "login_result") {
