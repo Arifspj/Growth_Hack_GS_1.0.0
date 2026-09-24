@@ -1657,7 +1657,7 @@ const AI_COLUMNS = [
 //  Margin of Safety %  = (Intrinsic - price) / price x 100  -> 900 / -65 etc.
 const INTRINSIC_COLUMNS = ["Intrinsic Value", "Margin of Safety %"];
 
-function grahamCalc(price, pe, bookValue, growth) {
+function grahamCalc(price, pe, bookValue, growth, qtrVar) {
   const p = toNum(price);
   if (!isFinite(p) || p <= 0) return null;
   const peNum = toNum(pe);
@@ -1673,7 +1673,12 @@ function grahamCalc(price, pe, bookValue, growth) {
   let fairValue = null;
   const g = toNum(growth);
   if (isFinite(g)) {
-    const gc = Math.min(Math.max(g, -10), 35);
+    // When the latest quarter collapsed (e.g. -98% QoQ), the annual "Profit
+    // growth" figure is usually inflated by a one-off year. Use the declining
+    // trend instead so the fair P/E falls to its floor instead of ballooning.
+    const qv = toNum(qtrVar);
+    const gcRaw = isFinite(qv) && qv <= -50 ? Math.min(g, -5) : g;
+    const gc = Math.min(Math.max(gcRaw, -10), 35);
     const fairPe = Math.max(8.5 + 2 * gc, 4);
     fairValue = eps * fairPe;
   }
@@ -1725,6 +1730,7 @@ async function computeIntrinsic(spreadsheetId, tabName, mode, maxRows, onProgres
   const peIdx = findCol([/^stockpe$/, /^pe$/, /^p\.e$/, /^peg$/]);
   const bookIdx = findCol([/^bookvalue$/, /^bvps$/]);
   const growthIdx = findCol([/^profitgrowth/]);
+  const qtrVarIdx = findCol([/^qtrprofitvar/]);
   const linkIdx = findCol([/^link$/]);
   const epsIdx = findCol([/^eps$/]);
   if (!priceCandidates.length || peIdx < 0) {
@@ -1791,7 +1797,8 @@ async function computeIntrinsic(spreadsheetId, tabName, mode, maxRows, onProgres
       row && row[priceIdx],
       row && row[peIdx],
       bookIdx >= 0 ? row && row[bookIdx] : "",
-      growthIdx >= 0 ? row && row[growthIdx] : ""
+      growthIdx >= 0 ? row && row[growthIdx] : "",
+      qtrVarIdx >= 0 ? row && row[qtrVarIdx] : ""
     );
     if (!calc) { failed++; continue; }
     pending.set(sheetRow, [calc.iv, `${calc.price} (${calc.mos}%)`]);
