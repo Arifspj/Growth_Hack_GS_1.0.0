@@ -2146,6 +2146,7 @@ async function handleChatGptAsk(prompt, opts) {
   gptTabId = null;
   await restoreTab();
   if (res && res.ok) return { success: true, text: res.text };
+  if (res && res.blocked) return { success: false, blocked: true, error: res.error };
   if (stopRequested) return { success: false, error: "Stopped by user." };
   return { success: false, error: (res && res.error) || "ChatGPT did not respond." };
 }
@@ -2271,7 +2272,17 @@ async function runAiResearch(spreadsheetId, tabName, mode, maxRows, onProgress) 
       return { failed: true, error: e.message || String(e) };
     }
     if (stopRequested) return "stopped";
-    if (!res.success) return { failed: true, error: res.error };
+    if (!res.success) {
+      // Security block from ChatGPT (Cloudflare "unusual activity"): stop the
+      // whole run — no point hammering 1000+ rows into a CAPTCHA. Tell the user
+      // to solve it in the ChatGPT tab, then re-run. Everything done so far is
+      // already saved, and this row is left empty for the next attempt.
+      if (res.blocked) {
+        stopRequested = true;
+        return { failed: true, blocked: true, error: res.error };
+      }
+      return { failed: true, error: res.error };
+    }
     // Field-by-field trimmed JSON targets the sheet. If the reply was truncated
     // (ChatGPT tab was inactive while generating), go back to that tab and re-read
     // the final settled answer before writing — never dump raw/botched text.

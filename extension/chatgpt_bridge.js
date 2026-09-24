@@ -10,6 +10,28 @@
 
   const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
+  // ChatGPT throws a Cloudflare-style security block ("Our systems have detected
+  // unusual activity…") when it suspects automation. Detect it so the extension
+  // can stop cleanly with a clear message instead of grinding every row into a
+  // useless "no valid JSON" failure. Only counts when the composer is also gone,
+  // so legit pages (or the occasional normal "try again later" toast) don't trip.
+  const BLOCK_SNIPPETS = [
+    "unusual activity",
+    "please try again later",
+    "verify you are human",
+    "not a robot",
+    "security check",
+    "cf-chl",
+    "cf-challenge",
+  ];
+  function detectBlocked() {
+    let bodyText = "";
+    try { bodyText = String(document.body && document.body.innerText || "").toLowerCase(); } catch (e) {}
+    if (!bodyText) return false;
+    const composerGone = !findComposer();
+    return composerGone && BLOCK_SNIPPETS.some((s) => bodyText.includes(s));
+  }
+
   function findComposer() {
     const selectors = [
       "textarea#prompt-textarea",
@@ -130,6 +152,7 @@
 
     while (Date.now() < deadline) {
       if (window.__gptAborted) return "";
+      if (detectBlocked()) return "__BLOCKED__";
       const stopBtn = document.querySelector(stopBtnSel);
       const txt = extractLastAnswer();
       const fresh = !!txt && txt !== baselineText;
@@ -166,10 +189,27 @@
     },
     _ask: async (prompt, opts) => {
       window.__gptAborted = false;
+      if (detectBlocked())
+        return {
+          ok: false,
+          blocked: true,
+          error:
+            "ChatGPT is showing a security check (\"unusual activity detected\"). " +
+            "Open chatgpt.com in Chrome, solve the CAPTCHA, then run AI again.",
+        };
       const useSearch = opts && opts.webSearch !== false;
       const composer = await waitForComposer();
-      if (!composer)
+      if (!composer) {
+        if (detectBlocked())
+          return {
+            ok: false,
+            blocked: true,
+            error:
+              "ChatGPT is showing a security check (\"unusual activity detected\"). " +
+              "Open chatgpt.com in Chrome, solve the CAPTCHA, then run AI again.",
+          };
         return { ok: false, error: "ChatGPT not ready. Please login and keep chatgpt.com open." };
+      }
 
       // If a previous reply is still generating, wait for it to finish and for
       // the send button to reappear. Sending mid-generation clicks the STOP
@@ -213,6 +253,14 @@
       }
       if (!clicked) return { ok: false, error: "Send button not found on chatgpt.com." };
       const text = await waitForCompletion(baselineText);
+      if (text === "__BLOCKED__")
+        return {
+          ok: false,
+          blocked: true,
+          error:
+            "ChatGPT is showing a security check (\"unusual activity detected\"). " +
+            "Open chatgpt.com in Chrome, solve the CAPTCHA, then run AI again.",
+        };
       if (!text) return { ok: false, error: "ChatGPT returned empty reply." };
       return { ok: true, text };
     },
