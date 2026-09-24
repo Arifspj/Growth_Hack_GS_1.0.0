@@ -104,26 +104,42 @@ async function accessToken() {
 }
 
 async function sheetsJson(path, { method = "GET", body } = {}) {
-  const token = await accessToken();
-  const res = await fetch(`https://sheets.googleapis.com/v4/spreadsheets/${path}`, {
-    method,
-    headers: {
-      Authorization: `Bearer ${token}`,
-      "Content-Type": "application/json",
-    },
-    body: body ? JSON.stringify(body) : undefined,
-  });
-  const text = await res.text();
-  let data = {};
-  if (text) {
-    try {
-      data = JSON.parse(text);
-    } catch {
-      data = { raw: text };
+  let lastErr = null;
+  for (let attempt = 0; attempt <= 3; attempt++) {
+    const token = await accessToken();
+    const res = await fetch(`https://sheets.googleapis.com/v4/spreadsheets/${path}`, {
+      method,
+      headers: {
+        Authorization: `Bearer ${token}`,
+        "Content-Type": "application/json",
+      },
+      body: body ? JSON.stringify(body) : undefined,
+    });
+    const text = await res.text();
+    let data = {};
+    if (text) {
+      try {
+        data = JSON.parse(text);
+      } catch {
+        data = { raw: text };
+      }
     }
+    if (res.ok) return data;
+    if (res.status === 429 || res.status === 403) {
+      // Sheets write quota (60/min) or read throttle — wait out the retry-after
+      // window (bounded) and try again so long runs never die mid-way.
+      const ra = data && data.error && data.error.code === 429
+        ? parseInt(String((data.error.details || []).find((d) => d.metadata && d.metadata.retry_after) || {}), 10)
+        : 0;
+      const delay = 1000 * (attempt + 1) + (Number.isFinite(ra) && ra > 0 ? Math.min(ra * 1000, 30000) : 0);
+      lastErr = new Error(`Sheets ${method} ${path} -> ${res.status} (rate limited)`);
+      if (stopRequested) break;
+      await sleep(delay);
+      continue;
+    }
+    throw new Error(`Sheets ${method} ${path} -> ${res.status} ${JSON.stringify(data)}`);
   }
-  if (!res.ok) throw new Error(`Sheets ${method} ${path} -> ${res.status} ${JSON.stringify(data)}`);
-  return data;
+  throw lastErr || new Error(`Sheets ${method} ${path} -> failed after retries`);
 }
 
 const qr = (r) => encodeURIComponent(r);
@@ -1597,7 +1613,7 @@ onProgress({
       const values = extractDetails(html);
       pending.set(sheetRow, values);
       filled++;
-      if (pending.size >= 20) await flush();
+      if (pending.size >= 100) await flush();
       if (source !== "tab-dom") {
         onProgress({
           type: "progress",
@@ -1777,12 +1793,29 @@ async function computeIntrinsic(spreadsheetId, tabName, mode, maxRows, onProgres
   const total = grid.length - 1;
   const pending = new Map();
   let filled = 0, skipped = 0, failed = 0;
+  const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
   const flush = async () => {
     const rows = [...pending.keys()].sort((a, b) => a - b);
     if (!rows.length) return;
-    const rs = rows[0], re = rows[rows.length - 1];
-    const values = rows.map((r) => pending.get(r));
-    await updateValues(spreadsheetId, `${rawTab}!${firstLetter}${rs}:${lastLetter}${re}`, values);
+    // Split into contiguous runs so each PUT covers only filled rows, then
+    // chunk them to stay comfortably under Sheets' 60 write-requests/minute
+    // quota (many small burst writes caused HTTP 429).
+    const runs = [];
+    let cur = [rows[0]];
+    for (let i = 1; i < rows.length; i++) {
+      if (rows[i] === rows[i - 1] + 1) cur.push(rows[i]);
+      else { runs.push(cur); cur = [rows[i]]; }
+    }
+    runs.push(cur);
+    for (const run of runs) {
+      for (let s = 0; s < run.length; s += 100) {
+        const chunk = run.slice(s, s + 100);
+        const rs = chunk[0], re = chunk[chunk.length - 1];
+        const values = chunk.map((r) => pending.get(r));
+        await updateValues(spreadsheetId, `${rawTab}!${firstLetter}${rs}:${lastLetter}${re}`, values);
+        if (chunk.length < run.length) await sleep(1100); // under 60 writes/min
+      }
+    }
     pending.clear();
   };
   for (let gi = 1; gi < grid.length; gi++) {
@@ -1811,7 +1844,7 @@ async function computeIntrinsic(spreadsheetId, tabName, mode, maxRows, onProgres
       total,
       message: `Intrinsic ${sheetRow}/${total} — IV ${calc.iv}${calc.mos != null ? `, MoS ${calc.mos}%` : ""}`,
     });
-    if (pending.size >= 20) await flush();
+    if (pending.size >= 100) await flush();
   }
   await flush();
   const stopped = stopRequested;
