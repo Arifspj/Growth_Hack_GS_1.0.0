@@ -1695,9 +1695,12 @@ async function computeIntrinsic(spreadsheetId, tabName, mode, maxRows, onProgres
   if (!grid.length) throw new Error(`Tab "${rawTab}" is empty — run Scrape + Details first.`);
 
   // Auto-detect columns by header name (case/spaces/punctuation-insensitive).
-  const findCol = (re) => {
+  // Accepts one regex or an array of aliases so any header naming works
+  // (e.g. "Current Price" / "CMP Rs." / "CMP", "Stock P/E" / "P/E").
+  const matchHdr = (nl, rx) => (Array.isArray(rx) ? rx.some((r) => r.test(nl)) : rx.test(nl));
+  const findCol = (rx) => {
     const idxs = [];
-    for (let i = 0; i < grid[0].length; i++) if (re.test(normLabel(grid[0][i]))) idxs.push(i);
+    for (let i = 0; i < grid[0].length; i++) if (matchHdr(normLabel(grid[0][i]), rx)) idxs.push(i);
     if (!idxs.length) return -1;
     if (idxs.length === 1) return idxs[0];
     // Multiple identical headers (e.g. two "Current Price"): pick the one that
@@ -1715,14 +1718,15 @@ async function computeIntrinsic(spreadsheetId, tabName, mode, maxRows, onProgres
   };
   const priceCandidates = (() => {
     const idxs = [];
-    for (let i = 0; i < grid[0].length; i++) if (/^currentprice$/.test(normLabel(grid[0][i]))) idxs.push(i);
+    for (let i = 0; i < grid[0].length; i++)
+      if (/^(currentprice|cmprs|cmp|cmprs\.|ltp|shareprice)$/.test(normLabel(grid[0][i]))) idxs.push(i);
     return idxs;
   })();
-  const peIdx = findCol(/^stockpe$/);
-  const bookIdx = findCol(/^bookvalue$/);
-  const growthIdx = findCol(/^profitgrowth/);
-  const linkIdx = findCol(/^link$/);
-  const epsIdx = findCol(/^eps$/);
+  const peIdx = findCol([/^stockpe$/, /^pe$/, /^p\.e$/, /^peg$/]);
+  const bookIdx = findCol([/^bookvalue$/, /^bvps$/]);
+  const growthIdx = findCol([/^profitgrowth/]);
+  const linkIdx = findCol([/^link$/]);
+  const epsIdx = findCol([/^eps$/]);
   if (!priceCandidates.length || peIdx < 0) {
     throw new Error(`Tab "${rawTab}" needs "Current Price" and "Stock P/E" columns — run Details first.`);
   }
