@@ -494,6 +494,24 @@ async function fetchDetail(url) {
   return { html: "", source: "none" };
 }
 
+// Fast path for AI research: the prompt only needs top-ratios + company profile +
+// pros/cons + net-profit series, and those (except top-ratios) are server-rendered.
+// Try plain public fetch first (2-5s). Only fall back to the heavy logged-in DOM
+// snapshot (up to ~25s x2 URLs) when the public pages come back empty/blocked.
+async function fetchDetailAi(url) {
+  for (const u of [standaloneUrl(url), url]) {
+    const pub = await fetchWithRetry(u).catch(() => "");
+    if (!pub) continue;
+    const prof = parseCompanyProfile(pub);
+    const pc = parseProsCons(pub);
+    const qNet = parseNetProfitSeries(pub, "quarters");
+    if (pub.length > 8000 && (prof.about || qNet.length)) {
+      return { html: pub, source: "public" };
+    }
+  }
+  return await fetchDetail(url);
+}
+
 function resolveNextPagination(html, currentUrl, page) {
   const nav = decodeAmp(html).match(/class="pagination"[\s\S]*?<\/div>/i);
   if (!nav) return null;
@@ -2106,7 +2124,7 @@ async function runAiResearch(spreadsheetId, tabName, mode, maxRows, onProgress) 
     onProgress({ type: "progress", status: "ai", label: tabName, done: ordinal + 1, total, message: `AI ${ordinal + 1}/${total} — ${t.name} (fetching)…` });
     let detail;
     try {
-      const { html } = await fetchDetail(consolidatedUrl(t.link));
+      const { html } = await fetchDetailAi(consolidatedUrl(t.link));
       const top = parseTopRatios(html);
       const prof = parseCompanyProfile(html);
       const pc = parseProsCons(html);
