@@ -234,6 +234,11 @@
         window.__gptAssistant.ask(msg.prompt, msg.opts).then((r) => sendResponse(r));
         return true;
       }
+      if (msg.action === "__gptGetLast") {
+        const text = extractLastAnswer();
+        sendResponse({ ok: !!text, text });
+        return;
+      }
     });
   }
 

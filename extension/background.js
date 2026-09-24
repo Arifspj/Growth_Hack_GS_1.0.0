@@ -2028,6 +2028,23 @@ async function handleChatGptAsk(prompt, opts) {
   return { success: false, error: (res && res.error) || "ChatGPT did not respond." };
 }
 
+// The ChatGPT reply can be truncated if its tab was inactive while generating.
+// Jump back to the ChatGPT tab and re-read the fully-settled last answer, so the
+// trimmed JSON (not a half-streamed botched reply) is what gets written to the sheet.
+async function reReadChatGptAnswer() {
+  const tab = await findOrOpenChatGptTab();
+  if (!tab) return "";
+  gptTabId = tab.id;
+  try {
+    await chrome.windows.update(tab.windowId, { focused: true });
+    await chrome.tabs.update(tab.id, { active: true });
+  } catch (e) {}
+  await sleep(1500); // give the now-active tab a moment to settle / finish rendering
+  const res = await chrome.tabs.sendMessage(tab.id, { action: "__gptGetLast" }).catch(() => null);
+  gptTabId = null;
+  return (res && res.ok && res.text) || "";
+}
+
 // Read the tab's rows (Link + Company), run up to maxRows of them through ChatGPT,
 // and write each answer field into its own column for that row (columns are added
 // first, in the order defined by the prompt's JSON shape).
@@ -2124,9 +2141,20 @@ async function runAiResearch(spreadsheetId, tabName, mode, maxRows, onProgress) 
     }
     if (stopRequested) return "stopped";
     if (!res.success) return { failed: true, error: res.error };
-    const parsed = extractAiJson(res.text);
+    // Field-by-field trimmed JSON targets the sheet. If the reply was truncated
+    // (ChatGPT tab was inactive while generating), go back to that tab and re-read
+    // the final settled answer before writing — never dump raw/botched text.
+    let parsed = extractAiJson(res.text);
+    let text = res.text;
+    if (!parsed) {
+      const fresh = await reReadChatGptAnswer();
+      if (fresh) {
+        parsed = extractAiJson(fresh);
+        text = fresh;
+      }
+    }
+    if (!parsed) return { failed: true, error: "ChatGPT reply did not contain valid JSON — will retry." };
     const cells = aiRowCells(parsed);
-    if (!parsed && res.text) cells[0] = res.text;
     try {
       await updateValues(spreadsheetId, `${rawTab}!${firstLetter}${t.gi + 1}:${lastLetter}${t.gi + 1}`, [cells]);
     } catch (e) {
