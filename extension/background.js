@@ -481,10 +481,10 @@ async function snapshotCompanyPage(url) {
 // with the logged-in session. Reading the live DOM via the hidden Screener window
 // reliably captures exactly what the user sees; public fetch is the last-resort fallback.
 async function fetchDetail(url) {
-  // Try consolidated first, fall back to the standalone (non-consolidated) page —
+  // Try the standalone (non-consolidated) page first, then the consolidated one —
   // some companies report standalone-only data, and on newer pages both load
   // top-ratios via JS so we judge success by actual numbers being present.
-  const urlsToTry = [url, standaloneUrl(url)];
+  const urlsToTry = [standaloneUrl(url), url];
   for (const u of urlsToTry) {
     const html = await snapshotCompanyPage(u);
     if (html) return { html, source: "tab-dom" };
