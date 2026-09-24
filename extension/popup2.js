@@ -6,6 +6,90 @@ let port = null;
 let state = { settings: null, spreadsheetId: null };
 let scrapingAll = false;
 
+let _resend = null;
+function onBgMessage(msg) {
+  if (msg.type === "ready") {
+    state.settings = msg.settings;
+    log(
+      `Settings tab "${msg.settings.settingsSheet}" → ${msg.settings.items.length} item(s).`
+    );
+    renderItems();
+    $("controls").hidden = false;
+  } else if (msg.type === "progress") {
+    if (msg.label) {
+      const itemEl = [...document.querySelectorAll(".item")].find(
+        (el) => el.querySelector(".item-label").textContent === msg.label
+      );
+      if (itemEl) {
+        const st = itemEl.querySelector(".status");
+        st.textContent = msg.message;
+      }
+    }
+    log(msg.message);
+  } else if (msg.type === "complete") {
+    const r = msg.result;
+    if (r.filled != null) {
+      const what = r.ai ? "rows researched" : r.intrinsic ? "rows valued" : "rows filled";
+      log(
+        (r.stopped ? "Stopped: " : "Done: ") +
+          `${r.filled}/${r.total} ${what} in "${r.tabName}".`,
+        r.stopped ? "" : "done"
+      );
+    } else {
+      log(
+        (r.stopped ? "Stopped: " : "Done: ") +
+          `${r.written} rows into "${r.tabName}"${r.created ? " (tab created)" : ""}${r.skipped ? ` — ${r.skipped} duplicates skipped` : ""}.`,
+        r.stopped ? "" : "done"
+      );
+    }
+    const itemEl2 = itemEl(r.tabName);
+    if (itemEl2) {
+      const st = itemEl2.querySelector(".status");
+      st.className = "status" + (r.stopped ? "" : " done");
+      if (r.filled != null) {
+        st.textContent = (r.stopped ? "stopped " : "") + `${r.filled} rows${r.ai ? " researched" : r.intrinsic ? " valued" : " filled"}`;
+      } else {
+        st.textContent = (r.stopped ? "stopped " : "") + `${r.written} rows`;
+      }
+      itemEl2.querySelectorAll("button").forEach((b) => (b.disabled = false));
+    }
+    $("stopBtn").disabled = true;
+    if (!scrapingAll) setTimeout(() => loadSheet(state.spreadsheetId), 1500);
+  } else if (msg.type === "stopped") {
+    log("Stop requested — finishing the current row then stopping.");
+  } else if (msg.type === "error") {
+    log("Error: " + msg.error, "error");
+    [...document.querySelectorAll(".item button")].forEach((b) => (b.disabled = false));
+    $("stopBtn").disabled = true;
+  } else if (msg.type === "login_result" || msg.type === "login_check") {
+    setLoginState(msg);
+  }
+}
+
+function send(msg) {
+  if (port) {
+    try {
+      port.postMessage(msg);
+      return;
+    } catch {
+      port = null;
+    }
+  }
+  port = chrome.runtime.connect({ name: "scrape" });
+  port.onDisconnect.addListener(() => {
+    port = null;
+  });
+  port.onMessage.addListener(onBgMessage);
+  if (_resend) clearTimeout(_resend);
+  _resend = setTimeout(() => {
+    try {
+      port.postMessage(msg);
+    } catch {
+      /* background still waking up */
+    }
+  }, 500);
+}
+
 function extractSheetId(value) {
   const v = String(value || "").trim();
   const m = v.match(/\/spreadsheets\/d\/([a-zA-Z0-9\-_]+)/);
@@ -151,7 +235,7 @@ async function runScrape(item, btn, status) {
   $("stopBtn").disabled = false;
   status.className = "status";
   status.textContent = "starting...";
-  port.postMessage({
+  send({
     type: "scrape",
     spreadsheetId: state.spreadsheetId,
     item,
@@ -176,7 +260,7 @@ async function runDetails(item, btn, status) {
   $("stopBtn").disabled = false;
   status.className = "status";
   status.textContent = "starting...";
-  port.postMessage({
+  send({
     type: "scrape_details",
     spreadsheetId: state.spreadsheetId,
     item,
@@ -191,7 +275,7 @@ async function runAiResearch(item, btn, status) {
   $("stopBtn").disabled = false;
   status.className = "status";
   status.textContent = "starting...";
-  port.postMessage({
+  send({
     type: "ai_research",
     spreadsheetId: state.spreadsheetId,
     item,
@@ -206,7 +290,7 @@ async function runIntrinsic(item, btn, status) {
   $("stopBtn").disabled = false;
   status.className = "status";
   status.textContent = "starting...";
-  port.postMessage({
+  send({
     type: "intrinsic",
     spreadsheetId: state.spreadsheetId,
     item,
@@ -238,7 +322,7 @@ async function loadSheet(spreadsheetId) {
   $("itemsWrap").hidden = true;
   $("scrapeAllBtn").disabled = true;
   $("log").innerHTML = "";
-  port.postMessage({ type: "init", spreadsheetId });
+  send({ type: "init", spreadsheetId });
 }
 
 function setLoginState(msg) {
@@ -261,64 +345,10 @@ function setLoginState(msg) {
 
 function init() {
   port = chrome.runtime.connect({ name: "scrape" });
-  port.onMessage.addListener((msg) => {
-    if (msg.type === "ready") {
-      state.settings = msg.settings;
-      log(
-        `Settings tab "${msg.settings.settingsSheet}" → ${msg.settings.items.length} item(s).`
-      );
-      renderItems();
-      $("controls").hidden = false;
-    } else if (msg.type === "progress") {
-      if (msg.label) {
-        const itemEl = [...document.querySelectorAll(".item")].find(
-          (el) => el.querySelector(".item-label").textContent === msg.label
-        );
-        if (itemEl) {
-          const st = itemEl.querySelector(".status");
-          st.textContent = msg.message;
-        }
-      }
-      log(msg.message);
-    } else if (msg.type === "complete") {
-      const r = msg.result;
-      if (r.filled != null) {
-        const what = r.ai ? "rows researched" : r.intrinsic ? "rows valued" : "rows filled";
-        log(
-          (r.stopped ? "Stopped: " : "Done: ") +
-            `${r.filled}/${r.total} ${what} in "${r.tabName}".`,
-          r.stopped ? "" : "done"
-        );
-      } else {
-        log(
-          (r.stopped ? "Stopped: " : "Done: ") +
-            `${r.written} rows into "${r.tabName}"${r.created ? " (tab created)" : ""}${r.skipped ? ` — ${r.skipped} duplicates skipped` : ""}.`,
-          r.stopped ? "" : "done"
-        );
-      }
-      const itemEl2 = itemEl(r.tabName);
-      if (itemEl2) {
-        const st = itemEl2.querySelector(".status");
-        st.className = "status" + (r.stopped ? "" : " done");
-        if (r.filled != null) {
-          st.textContent = (r.stopped ? "stopped " : "") + `${r.filled} rows${r.ai ? " researched" : r.intrinsic ? " valued" : " filled"}`;
-        } else {
-          st.textContent = (r.stopped ? "stopped " : "") + `${r.written} rows`;
-        }
-        itemEl2.querySelectorAll("button").forEach((b) => (b.disabled = false));
-      }
-      $("stopBtn").disabled = true;
-      if (!scrapingAll) setTimeout(() => loadSheet(state.spreadsheetId), 1500);
-    } else if (msg.type === "stopped") {
-      log("Stop requested — finishing the current row then stopping.");
-    } else if (msg.type === "error") {
-      log("Error: " + msg.error, "error");
-      [...document.querySelectorAll(".item button")].forEach((b) => (b.disabled = false));
-      $("stopBtn").disabled = true;
-    } else if (msg.type === "login_result" || msg.type === "login_check") {
-      setLoginState(msg);
-    }
+  port.onDisconnect.addListener(() => {
+    port = null;
   });
+  port.onMessage.addListener(onBgMessage);
 
   $("loginBtn").addEventListener("click", () => {
     const email = $("loginEmail").value.trim();
@@ -326,7 +356,7 @@ function init() {
     if (!email || !password) return setLoginState({ error: "Enter email and password." });
     $("loginBtn").disabled = true;
     $("loginState").textContent = "Logging in…";
-    port.postMessage({
+    send({
       type: "login",
       email,
       password,
@@ -340,7 +370,7 @@ function init() {
 
   $("stopBtn").addEventListener("click", () => {
     $("stopBtn").disabled = true;
-    port.postMessage({ type: "stop" });
+    send({ type: "stop" });
   });
 
   $("scrapeAllBtn").addEventListener("click", async () => {
@@ -410,7 +440,7 @@ function init() {
     const saved = await chrome.storage.local.get(["screenerEmail", "screenerRemember"]);
     if (saved.screenerEmail) $("loginEmail").value = saved.screenerEmail;
     $("rememberChk").checked = !!saved.screenerRemember;
-    port.postMessage({ type: "login_check" });
+    send({ type: "login_check" });
     const active = await activeTabSheetId();
     const initial = active || extractSheetId(DEFAULT_SHEET);
     $("sheetId").value = active ? "" : DEFAULT_SHEET;

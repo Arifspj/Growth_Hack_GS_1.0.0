@@ -351,6 +351,27 @@ function limitFromInput() {
   return v === "" ? "0" : v;
 }
 
+function sendToBg(msg) {
+    if (st.port) {
+      try {
+        st.port.postMessage(msg);
+        return true;
+      } catch {
+        /* port disconnected — fall through to reconnect+retry below */
+      }
+    }
+    if (window.__growthHackReconnect) clearTimeout(window.__growthHackReconnect);
+    connectPort();
+    setTimeout(() => {
+      try {
+        st.port.postMessage(msg);
+      } catch {
+        /* background is waking up; user can click again */
+      }
+    }, 500);
+    return true;
+  }
+
 function runScrape(item, btn, status, fromAll) {
   const mode = chosenMode();
   if (mode === "replace" && !window.confirm(`Replace tab "${item.label}"? Existing data will be cleared.`)) {
@@ -361,7 +382,7 @@ function runScrape(item, btn, status, fromAll) {
   root.getElementById("stopBtn").disabled = false;
   status.className = "status";
   status.textContent = "starting…";
-  st.port.postMessage({
+  sendToBg({
     type: "scrape",
     spreadsheetId: st.spreadsheetId,
     item,
@@ -380,7 +401,7 @@ function runDetails(item, btn, status) {
   root.getElementById("stopBtn").disabled = false;
   status.className = "status";
   status.textContent = "starting…";
-  st.port.postMessage({
+  sendToBg({
     type: "scrape_details",
     spreadsheetId: st.spreadsheetId,
     item,
@@ -398,7 +419,7 @@ function runAiResearch(item, btn, status) {
   root.getElementById("stopBtn").disabled = false;
   status.className = "status";
   status.textContent = "starting…";
-  st.port.postMessage({
+  sendToBg({
     type: "ai_research",
     spreadsheetId: st.spreadsheetId,
     item,
@@ -416,7 +437,7 @@ function runIntrinsic(item, btn, status) {
   root.getElementById("stopBtn").disabled = false;
   status.className = "status";
   status.textContent = "starting…";
-  st.port.postMessage({
+  sendToBg({
     type: "intrinsic",
     spreadsheetId: st.spreadsheetId,
     item,
@@ -435,7 +456,7 @@ function updateItemButtons(label, disabled) {
     st.spreadsheetId = spreadsheetId;
     root.getElementById("sheetInfo").textContent = spreadsheetId.slice(0, 12) + "…";
     log(`Loading Settings from sheet ${spreadsheetId}…`);
-    st.port.postMessage({ type: "init", spreadsheetId });
+    sendToBg({ type: "init", spreadsheetId });
   }
 
   function itemElByLabel(label) {
@@ -445,7 +466,27 @@ function updateItemButtons(label, disabled) {
   }
 
   function connectPort() {
+    if (st.port) {
+      try {
+        st.port.postMessage({ type: "ping" });
+        return;
+      } catch {
+        st.port = null;
+      }
+    }
     st.port = chrome.runtime.connect({ name: "scrape" });
+    // MV3 service worker can go idle and drop the port; on disconnect reconnect
+    // and re-load settings so the widget stays usable.
+    st.port.onDisconnect.addListener(() => {
+      st.port = null;
+      if (window.__growthHackReconnect) clearTimeout(window.__growthHackReconnect);
+      window.__growthHackReconnect = setTimeout(() => {
+        if (document.contains(root)) {
+          connectPort();
+          if (st.spreadsheetId) loadSheet(st.spreadsheetId);
+        }
+      }, 800);
+    });
     st.port.onMessage.addListener((msg) => {
       if (msg.type === "ready") {
         st.settings = msg.settings;
@@ -537,7 +578,7 @@ function updateItemButtons(label, disabled) {
     if (!email || !password) return setLoginState({ error: "Enter email and password." });
     root.getElementById("loginBtn").disabled = true;
     root.getElementById("loginState").textContent = "Logging in…";
-    st.port.postMessage({
+    sendToBg({
       type: "login",
       email,
       password,
@@ -554,7 +595,7 @@ function updateItemButtons(label, disabled) {
 
   root.getElementById("stopBtn").addEventListener("click", () => {
     root.getElementById("stopBtn").disabled = true;
-    st.port.postMessage({ type: "stop" });
+    sendToBg({ type: "stop" });
   });
 
   root.getElementById("scrapeAllBtn").addEventListener("click", async () => {
@@ -597,7 +638,7 @@ function updateItemButtons(label, disabled) {
     const saved = await chrome.storage.local.get(["screenerEmail", "screenerRemember"]);
     if (saved.screenerEmail) root.getElementById("loginEmail").value = saved.screenerEmail;
     root.getElementById("rememberChk").checked = !!saved.screenerRemember;
-    st.port.postMessage({ type: "login_check" });
+    sendToBg({ type: "login_check" });
     const m = location.href.match(/\/spreadsheets\/d\/([a-zA-Z0-9\-_]+)/);
     const sheet = m ? m[1] : DEFAULT_SHEET;
     root.getElementById("sheetId").value = m ? "" : DEFAULT_SHEET;
