@@ -191,7 +191,7 @@ function renderItems() {
     const abtn = document.createElement("button");
     abtn.className = "btn ai";
     abtn.textContent = "AI";
-    abtn.title = 'Run the first N rows through ChatGPT research and write the JSON into the "AI Research (JSON)" column';
+    abtn.title = 'Run the first N rows through the selected AI provider (ChatGPT/DeepSeek) and write the JSON into the "AI Research (JSON)" column';
     abtn.addEventListener("click", () => runAiResearch(item, abtn, status));
     const ivBtn = document.createElement("button");
     ivBtn.className = "btn iv";
@@ -319,6 +319,7 @@ async function runAiResearch(item, btn, status) {
     item,
     mode: chosenMode(),
     maxRows: limitFromInput(),
+    aiProvider: $("aiProviderSel").value,
   });
 }
 
@@ -459,6 +460,9 @@ function init() {
   $("replaceChk").addEventListener("change", (e) => {
     $("appendChk").checked = !e.target.checked;
   });
+  $("aiProviderSel").addEventListener("change", (e) => {
+    chrome.storage.sync.set({ aiProvider: e.target.value }).catch(() => {});
+  });
 
   $("refreshBtn").addEventListener("click", async () => {
     try {
@@ -479,6 +483,8 @@ function init() {
     const saved = await chrome.storage.local.get(["screenerEmail", "screenerRemember"]);
     if (saved.screenerEmail) $("loginEmail").value = saved.screenerEmail;
     $("rememberChk").checked = !!saved.screenerRemember;
+    const prov = await chrome.storage.sync.get("aiProvider");
+    $("aiProviderSel").value = prov.aiProvider === "deepseek" ? "deepseek" : "chatgpt";
     send({ type: "login_check" });
     const active = await activeTabSheetId();
     const initial = active || extractSheetId(DEFAULT_SHEET);

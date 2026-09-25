@@ -249,9 +249,16 @@ let label;
       <div class="row between">
         <span class="chk"><label style="margin:0 6px 0 0" title="Scrape = pages (0 = all). Details/AI = rows. 0/all = everything; 4 = row 4; 4,7 = rows 4 & 7; 4-7 = rows 4..7; 4-7,9 = mixed.">Pages / Rows (0=all):</label><input type="text" id="limitInput" value="0" style="width:64px"></span>
       </div>
-      <div class="row" style="gap:8px;margin-top:8px">
+<div class="row" style="gap:8px;margin-top:8px">
         <button class="btn" id="stopBtn" disabled style="flex:1">Stop</button>
         <button class="btn primary" id="scrapeAllBtn" disabled style="flex:2">Scrape All</button>
+      </div>
+      <div class="row between" style="margin-top:8px">
+        <span class="chk">AI:</span>
+        <select id="aiProviderSel" style="flex:1;padding:6px 8px;border:1.5px solid #e2e8f0;border-radius:9px;background:#fbfcfd;font-family:inherit;font-size:12px">
+          <option value="chatgpt" selected>ChatGPT</option>
+          <option value="deepseek">DeepSeek</option>
+        </select>
       </div>
 </div>
     <div class="seg">
@@ -351,7 +358,7 @@ let label;
       const abtn = document.createElement("button");
       abtn.className = "btn ai";
       abtn.textContent = "AI";
-      abtn.title = 'Run the first N rows through ChatGPT research and fill the AI Summary / Linked Companies / Big Orders / Catalysts / Risks columns';
+      abtn.title = 'Run the first N rows through the selected AI provider (ChatGPT/DeepSeek) and fill the AI Summary / Linked Companies / Big Orders / Catalysts / Risks columns';
       abtn.addEventListener("click", () => runAiResearch(item, abtn, status));
       const ivBtn = document.createElement("button");
       ivBtn.className = "btn iv";
@@ -458,6 +465,7 @@ function runAiResearch(item, btn, status) {
     item,
     mode: chosenMode(),
     maxRows: limitFromInput(),
+    aiProvider: root.getElementById("aiProviderSel").value,
   });
 }
 
@@ -674,11 +682,16 @@ function updateItemButtons(label, disabled) {
     log("Scrape All finished.");
   });
 
-  async function widgetInit() {
+async function widgetInit() {
     connectPort();
     const saved = await chrome.storage.local.get(["screenerEmail", "screenerRemember"]);
     if (saved.screenerEmail) root.getElementById("loginEmail").value = saved.screenerEmail;
     root.getElementById("rememberChk").checked = !!saved.screenerRemember;
+    const prov = await chrome.storage.sync.get("aiProvider");
+    root.getElementById("aiProviderSel").value = prov.aiProvider === "deepseek" ? "deepseek" : "chatgpt";
+    root.getElementById("aiProviderSel").addEventListener("change", (e) => {
+      chrome.storage.sync.set({ aiProvider: e.target.value }).catch(() => {});
+    });
     sendToBg({ type: "login_check" });
     const m = location.href.match(/\/spreadsheets\/d\/([a-zA-Z0-9\-_]+)/);
     const sheet = m ? m[1] : DEFAULT_SHEET;

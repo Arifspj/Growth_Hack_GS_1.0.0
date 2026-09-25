@@ -10,6 +10,51 @@ let gptTabId = null;
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
+// ---- AI provider registry (ChatGPT default; DeepSeek optional) ----
+const AI_PROVIDERS = {
+  chatgpt: {
+    label: "ChatGPT",
+    tabUrl: "https://chatgpt.com/",
+    tabPattern: "https://chatgpt.com/*",
+    bridgeFile: "chatgpt_bridge.js",
+    okAction: "__gptGetBridge",
+    askAction: "__gptAsk",
+    getLastAction: "__gptGetLast",
+    abortAction: "__gptAbort",
+    notReady: "ChatGPT page not ready. Please open chatgpt.com and login in Chrome, then try again.",
+    blockedMsg:
+      'ChatGPT is showing a security check ("unusual activity detected"). ' +
+      "Open chatgpt.com in Chrome, solve the CAPTCHA, then run AI again.",
+  },
+  deepseek: {
+    label: "DeepSeek",
+    tabUrl: "https://chat.deepseek.com/",
+    tabPattern: "https://chat.deepseek.com/*",
+    bridgeFile: "deepseek_bridge.js",
+    okAction: "__dsGetBridge",
+    askAction: "__dsAsk",
+    getLastAction: "__dsGetLast",
+    abortAction: "__dsAbort",
+    notReady: "DeepSeek page not ready. Please open chat.deepseek.com and login in Chrome, then try again.",
+    blockedMsg:
+      "DeepSeek is showing a security check. " +
+      "Open chat.deepseek.com in Chrome, complete the check, then run AI again.",
+  },
+};
+
+async function getAiProvider() {
+  const s = await chrome.storage.sync.get("aiProvider");
+  return s.aiProvider === "deepseek" ? s.aiProvider : "chatgpt";
+}
+
+async function setAiProvider(p) {
+  await chrome.storage.sync.set({ aiProvider: p === "deepseek" ? "deepseek" : "chatgpt" });
+}
+
+function aiProviderCfg(p) {
+  return AI_PROVIDERS[p] || AI_PROVIDERS.chatgpt;
+}
+
 function cancelScrape() {
   stopRequested = true;
   if (activeAbort) {
@@ -20,6 +65,7 @@ function cancelScrape() {
   if (gptTabId != null) {
     try {
       chrome.tabs.sendMessage(gptTabId, { action: "__gptAbort" }).catch(() => {});
+      chrome.tabs.sendMessage(gptTabId, { action: "__dsAbort" }).catch(() => {});
     } catch {}
   }
 }
@@ -2095,37 +2141,41 @@ function extractAiJson(text) {
   return null;
 }
 
-async function findOrOpenChatGptTab() {
-  const existing = await chrome.tabs.query({ url: ["https://chatgpt.com/*"] });
+async function findOrOpenChatGptTab(provider = "chatgpt") {
+  const cfg = aiProviderCfg(provider);
+  const existing = await chrome.tabs.query({ url: [cfg.tabPattern] });
   if (existing && existing.length) return existing[0];
-  return await chrome.tabs.create({ url: "https://chatgpt.com/", active: false });
+  return await chrome.tabs.create({ url: cfg.tabUrl, active: false });
 }
 
 function getActiveTab() {
   return chrome.tabs.query({ active: true, lastFocusedWindow: true }).then((t) => (t && t[0]) || null);
 }
 
-async function ensureGptBridgeReady(tabId, timeoutMs = 60000) {
+async function ensureGptBridgeReady(provider, tabId, timeoutMs = 60000) {
+  const cfg = aiProviderCfg(provider);
   const t0 = Date.now();
   while (Date.now() - t0 < timeoutMs) {
     try {
-      const res = await chrome.tabs.sendMessage(tabId, { action: "__gptGetBridge" });
+      const res = await chrome.tabs.sendMessage(tabId, { action: cfg.okAction });
       if (res && res.ready) return true;
     } catch (e) {}
     try {
-      await chrome.scripting.executeScript({ target: { tabId }, files: ["chatgpt_bridge.js"] });
+      await chrome.scripting.executeScript({ target: { tabId }, files: [cfg.bridgeFile] });
     } catch (e) {}
     await sleep(800);
   }
   return false;
 }
 
-// Drive one research pass: focus a chatgpt.com tab, inject the bridge, send the
-// prompt (web search ON), wait for the answer, then restore the user's tab.
-// Mirrors the working flow from the Chart Screener Chrome project.
-async function handleChatGptAsk(prompt, opts) {
+// Drive one research pass: focus an AI-provider tab (chatgpt.com or
+// chat.deepseek.com), inject its bridge, send the prompt (web search ON), wait
+// for the answer, then restore the user's tab.
+async function handleChatGptAsk(prompt, opts, provider) {
+  const p = provider || (await getAiProvider());
+  const cfg = aiProviderCfg(p);
   const prevTab = await getActiveTab();
-  const tab = await findOrOpenChatGptTab();
+  const tab = await findOrOpenChatGptTab(p);
   gptTabId = tab.id;
   try {
     const win = await chrome.windows.get(tab.windowId);
@@ -2137,25 +2187,27 @@ async function handleChatGptAsk(prompt, opts) {
       try { await chrome.tabs.update(prevTab.id, { active: true }); } catch (e) {}
     }
   };
-  const ready = await ensureGptBridgeReady(tab.id);
+  const ready = await ensureGptBridgeReady(p, tab.id);
   if (!ready) {
     await restoreTab();
-    return { success: false, error: 'ChatGPT page not ready. Please open chatgpt.com and login in Chrome, then try again.' };
+    return { success: false, error: cfg.notReady };
   }
-  const res = await chrome.tabs.sendMessage(tab.id, { action: "__gptAsk", prompt, opts }).catch(() => null);
+  const res = await chrome.tabs.sendMessage(tab.id, { action: cfg.askAction, prompt, opts }).catch(() => null);
   gptTabId = null;
   await restoreTab();
   if (res && res.ok) return { success: true, text: res.text };
   if (res && res.blocked) return { success: false, blocked: true, error: res.error };
   if (stopRequested) return { success: false, error: "Stopped by user." };
-  return { success: false, error: (res && res.error) || "ChatGPT did not respond." };
+  return { success: false, error: (res && res.error) || `${cfg.label} did not respond.` };
 }
 
-// The ChatGPT reply can be truncated if its tab was inactive while generating.
-// Jump back to the ChatGPT tab and re-read the fully-settled last answer, so the
+// The provider reply can be truncated if its tab was inactive while generating.
+// Jump back to the provider tab and re-read the fully-settled last answer, so the
 // trimmed JSON (not a half-streamed botched reply) is what gets written to the sheet.
-async function reReadChatGptAnswer() {
-  const tab = await findOrOpenChatGptTab();
+async function reReadChatGptAnswer(provider) {
+  const p = provider || (await getAiProvider());
+  const cfg = aiProviderCfg(p);
+  const tab = await findOrOpenChatGptTab(p);
   if (!tab) return "";
   gptTabId = tab.id;
   try {
@@ -2163,7 +2215,7 @@ async function reReadChatGptAnswer() {
     await chrome.tabs.update(tab.id, { active: true });
   } catch (e) {}
   await sleep(1500); // give the now-active tab a moment to settle / finish rendering
-  const res = await chrome.tabs.sendMessage(tab.id, { action: "__gptGetLast" }).catch(() => null);
+  const res = await chrome.tabs.sendMessage(tab.id, { action: cfg.getLastAction }).catch(() => null);
   gptTabId = null;
   return (res && res.ok && res.text) || "";
 }
@@ -2171,8 +2223,9 @@ async function reReadChatGptAnswer() {
 // Read the tab's rows (Link + Company), run up to maxRows of them through ChatGPT,
 // and write each answer field into its own column for that row (columns are added
 // first, in the order defined by the prompt's JSON shape).
-async function runAiResearch(spreadsheetId, tabName, mode, maxRows, onProgress) {
+async function runAiResearch(spreadsheetId, tabName, mode, maxRows, onProgress, provider) {
   const rawTab = tabName;
+  const aiProvider = provider || (await getAiProvider());
   onProgress({ type: "progress", status: "ai", label: tabName, message: `Reading rows from "${rawTab}"…` });
   const grid = await getValues(spreadsheetId, `${rawTab}!A1:ZZ20000`);
   if (!grid.length) throw new Error(`Tab "${rawTab}" is empty — run the main scrape first.`);
@@ -2264,8 +2317,8 @@ async function runAiResearch(spreadsheetId, tabName, mode, maxRows, onProgress) 
     let res;
     try {
       res = await Promise.race([
-        handleChatGptAsk(prompt, { webSearch: true }),
-        new Promise((_, rej) => setTimeout(() => rej(new Error("ChatGPT timeout (260s)")), 260000)),
+        handleChatGptAsk(prompt, { webSearch: true }, aiProvider),
+        new Promise((_, rej) => setTimeout(() => rej(new Error("AI timeout (260s)")), 260000)),
       ]);
     } catch (e) {
       if (stopRequested) return "stopped";
@@ -2289,7 +2342,7 @@ async function runAiResearch(spreadsheetId, tabName, mode, maxRows, onProgress) 
     let parsed = extractAiJson(res.text);
     let text = res.text;
     if (!parsed) {
-      const fresh = await reReadChatGptAnswer();
+      const fresh = await reReadChatGptAnswer(aiProvider);
       if (fresh) {
         parsed = extractAiJson(fresh);
         text = fresh;
@@ -2450,7 +2503,7 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
     return false;
   }
   if (msg && msg.action === "chatgptAsk") {
-    handleChatGptAsk(msg.prompt, msg.opts)
+    handleChatGptAsk(msg.prompt, msg.opts, msg.provider)
       .then((res) => sendResponse(res))
       .catch((err) => sendResponse({ success: false, error: String((err && err.message) || err) }));
     return true;
@@ -2458,7 +2511,7 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
   if (msg && msg.action === "openChatgpt") {
     (async () => {
       try {
-        const tab = await findOrOpenChatGptTab();
+        const tab = await findOrOpenChatGptTab(msg.provider);
         const win = await chrome.windows.get(tab.windowId);
         await chrome.windows.update(win.id, { focused: true });
         await chrome.tabs.update(tab.id, { active: true });
@@ -2506,7 +2559,8 @@ chrome.runtime.onConnect.addListener((port) => {
           (msg.item && msg.item.label) || "",
           msg.mode || "replace",
           String(msg.maxRows == null ? "" : msg.maxRows).trim(),
-          (p) => port.postMessage(p)
+          (p) => port.postMessage(p),
+          msg.aiProvider
         );
         port.postMessage({ type: "complete", result });
       } else if (msg.type === "intrinsic") {

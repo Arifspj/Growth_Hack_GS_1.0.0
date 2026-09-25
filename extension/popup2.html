@@ -44,7 +44,14 @@
         <button id="scrapeAllBtn" class="btn primary" disabled>Scrape All</button>
       </div>
     </div>
-    <div class="muted" style="margin-top:6px">AI button runs the first N rows through ChatGPT (web search ON) and writes the JSON reply into the "AI Research (JSON)" column.</div>
+    <div class="row" style="margin-top:6px">
+      <label for="aiProviderSel" style="margin:0">AI:</label>
+      <select id="aiProviderSel" style="flex:1">
+        <option value="chatgpt" selected>ChatGPT</option>
+        <option value="deepseek">DeepSeek</option>
+      </select>
+    </div>
+    <div class="muted" style="margin-top:6px">Clicking AI runs the first N rows through the selected provider (web search ON) and writes the JSON reply into the "AI Research (JSON)" column.</div>
   </section>
 
   <section id="itemsWrap" hidden>
