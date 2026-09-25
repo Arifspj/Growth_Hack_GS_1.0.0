@@ -2336,33 +2336,36 @@ async function handleChatGptAsk(prompt, opts, provider) {
   let res;
   if (p === "deepseek") {
     // DeepSeek blocks synthetic clicks/keys, so drive the composer through the
-    // Chrome DevTools Protocol: real typed input + real Enter press.
+    // Chrome DevTools Protocol: real typed input + real Enter press. The
+    // debugger is attached ONLY for the send (a moment), then detached before
+    // waiting for the reply — Chrome shows an ugly "started debugging this
+    // browser" banner the whole time the debugger stays attached.
+    const bl = await chrome.tabs
+      .sendMessage(tab.id, { action: "__dsGetLast" })
+      .then((b) => (b && b.ok && b.text) || "")
+      .catch(() => "");
     try {
       const attached = await cdpAttach(tab.id);
       if (!attached) {
         res = { error: "Could not attach the debugger to DeepSeek. Close other DevTools windows on that tab and retry." };
       } else {
         try {
-          const baseline = await chrome.tabs
-            .sendMessage(tab.id, { action: "__dsGetLast" })
-            .catch(() => null);
-          const bl = (baseline && baseline.ok && baseline.text) || "";
           if (opts && opts.webSearch) await cdpToggleSearch(tab.id);
           const sent = await cdpTypeAndSend(tab.id, prompt);
-          if (!sent.ok) {
-            res = { error: sent.error };
-          } else {
-            const waited = await chrome.tabs
-              .sendMessage(tab.id, { action: "__dsWaitResult", baseline: bl })
-              .catch(() => null);
-            res = waited || null;
-          }
+          res = sent.ok ? null : { error: sent.error };
         } finally {
           try { await chrome.debugger.detach({ tabId: tab.id }); } catch (e) {}
         }
       }
     } catch (e) {
       res = { error: `DeepSeek send failed: ${e && e.message ? e.message : e}` };
+    }
+    if (!res) {
+      // Debugger is off now; wait for the reply via the tab's bridge instead.
+      const waited = await chrome.tabs
+        .sendMessage(tab.id, { action: "__dsWaitResult", baseline: bl })
+        .catch(() => null);
+      res = waited || null;
     }
   } else {
     res = await chrome.tabs.sendMessage(tab.id, { action: cfg.askAction, prompt, opts }).catch(() => null);
