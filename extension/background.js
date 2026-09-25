@@ -2400,6 +2400,14 @@ async function reReadChatGptAnswer(provider) {
 async function runAiResearch(spreadsheetId, tabName, mode, maxRows, onProgress, provider) {
   const rawTab = tabName;
   const aiProvider = provider || (await getAiProvider());
+  // Human-like pacing between AI requests: randomly pause so neither the AI
+  // provider's rate-limit (auth/security checks) nor Google Sheets' 60 write
+  // requests/minute quota gets hammered on a fast run.
+  const AI_PACE_MS = 2500;
+  const sleepPace = async () => {
+    const jitter = Math.floor(Math.random() * 2000);
+    await new Promise((r) => setTimeout(r, AI_PACE_MS + jitter));
+  };
   onProgress({ type: "progress", status: "ai", label: tabName, message: `Reading rows from "${rawTab}"…` });
   const grid = await getValues(spreadsheetId, `${rawTab}!A1:ZZ20000`);
   if (!grid.length) throw new Error(`Tab "${rawTab}" is empty — run the main scrape first.`);
@@ -2487,7 +2495,8 @@ async function runAiResearch(spreadsheetId, tabName, mode, maxRows, onProgress, 
     void fetched;
     detail.link = t.link;
     const prompt = buildAiResearchPrompt(detail);
-    onProgress({ type: "progress", status: "ai", label: tabName, done: ordinal + 1, total, message: `AI ${ordinal + 1}/${total} — ${t.name} (ChatGPT researching…)` });
+    const providerLabel = aiProviderCfg(aiProvider).label;
+      onProgress({ type: "progress", status: "ai", label: tabName, done: ordinal + 1, total, message: `AI ${ordinal + 1}/${total} — ${t.name} (${providerLabel} researching…)` });
     let res;
     try {
       res = await Promise.race([
@@ -2532,7 +2541,7 @@ async function runAiResearch(spreadsheetId, tabName, mode, maxRows, onProgress, 
     return { ok: true };
   };
 
-  // First pass: every row exactly once, never aborting on ChatGPT hiccups.
+  // First pass: every row exactly once, never aborting on AI hiccups.
   for (let i = 0; i < targets.length; i++) {
     if (stopRequested) break;
     const t = targets[i];
@@ -2546,13 +2555,17 @@ async function runAiResearch(spreadsheetId, tabName, mode, maxRows, onProgress, 
       failures.push({ t, ordinal: i, error: r.error });
       onProgress({ type: "progress", status: "ai", label: tabName, message: `AI ${i + 1}/${total} — ${t.name}: ${r.error}` });
     }
+    // Space out requests between rows to stay under rate limits (AI provider +
+    // Sheets write quota). Skip the pause if we're about to stop / blocked.
+    if (!stopRequested && i < targets.length - 1) await sleepPace();
   }
 
   // Second pass: retry only the rows that failed, once each.
   if (failures.length && !stopRequested) {
     onProgress({ type: "progress", status: "ai", label: tabName, message: `Retrying ${failures.length} failed row(s)…` });
-    for (const f of failures) {
+    for (let fi = 0; fi < failures.length; fi++) {
       if (stopRequested) break;
+      const f = failures[fi];
       const r = await processTarget(f.t, f.ordinal);
       if (r === "stopped") break;
       if (r.ok) {
@@ -2562,6 +2575,7 @@ async function runAiResearch(spreadsheetId, tabName, mode, maxRows, onProgress, 
       } else {
         onProgress({ type: "progress", status: "ai", label: tabName, message: `AI ${f.ordinal + 1}/${total} — ${f.t.name}: still failing (${r.error})` });
       }
+      if (!stopRequested && fi < failures.length - 1) await sleepPace();
     }
   }
   const stopped = stopRequested;
