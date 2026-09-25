@@ -1826,6 +1826,7 @@ const AI_COLUMNS = [
   "AI Big Orders",
   "AI Catalysts",
   "AI Risks",
+  "AI Sector",
 ];
 
 // ---------- Intrinsic Value (matches the reference project) ----------
@@ -2028,12 +2029,27 @@ function aiRowCells(parsed) {
   const order = (x) =>
     ["desc", "value", "date"].filter((k) => x && x[k]).map((k) => x[k]).join(" — ");
   const point = (x) => (x && x.point ? x.point : "");
+  const sector = parsed.sector;
+  const sectorStr = (() => {
+    if (!sector) return "";
+    if (typeof sector === "string") return sector;
+    if (typeof sector === "object") {
+      const parts = [];
+      if (sector.name) parts.push(sector.name);
+      if (sector.tailwind === true) parts.push("TAILWIND SECTOR");
+      if (sector.tailwind === false) parts.push("Not a tailwind sector");
+      if (sector.reason) parts.push(sector.reason);
+      return parts.join(" — ");
+    }
+    return "";
+  })();
   return [
     String(parsed.summary || ""),
     list(parsed.linkedCompanies, link),
     list(parsed.bigOrders, order),
     list(parsed.catalysts, point),
     list(parsed.risks, point),
+    sectorStr,
   ];
 }
 
@@ -2212,7 +2228,12 @@ const buildAiResearchPrompt = (d) => {
     "- Reply with ONLY ONE valid JSON object. Nothing before and nothing after it.",
     "- Do NOT use markdown code fences (no ```) and do NOT append any footnote / link list after the JSON.",
     '- Exact shape:',
-    '{"summary":"\u22642 short sentences","linkedCompanies":[{"name":"company/group","relation":"how linked, one short line","source":"url if any else blank"}],"bigOrders":[{"desc":"what won, one short line","value":"value if known else blank","date":"when if known else blank","source":"url if any else blank"}],"catalysts":[{"point":"trigger with logic, one short line","source":"url if any else blank"}],"risks":[{"point":"risk, one short line","source":"url if any else blank"}]}',
+    '{"summary":"\u22642 short sentences","sector":{"name":"company sector","tailwind":true or false,"reason":"why this sector is or is not a tailwind (structural-shift) sector, one short line"},"linkedCompanies":[{"name":"company/group","relation":"how linked, one short line","source":"url if any else blank"}],"bigOrders":[{"desc":"what won, one short line","value":"value if known else blank","date":"when if known else blank","source":"url if any else blank"}],"catalysts":[{"point":"trigger with logic, one short line","source":"url if any else blank"}],"risks":[{"point":"risk, one short line","source":"url if any else blank"}]}',
+    "",
+    "SECTOR TAILWIND RULE (VERY IMPORTANT):",
+    "- sector.name = the sector this stock belongs to (e.g. Capital Goods, Chemicals, IT Services, Power, Defense, Textiles).",
+    '- sector.tailwind = true ONLY if the sector is experiencing a massive structural/shift tailwind right now (e.g. current big ones include AI Infrastructure, Data Centers, Renewable Energy, Defense). tailwind = false otherwise.',
+    "- sector.reason = one short line explaining the tailwind (e.g. government capex, global demand shift) or why it is not a tailwind sector.",
   ];
   return rows.filter((r) => r !== null && r !== "").join("\n");
 };

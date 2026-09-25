@@ -358,7 +358,7 @@ let label;
       const abtn = document.createElement("button");
       abtn.className = "btn ai";
       abtn.textContent = "AI";
-      abtn.title = 'Run the first N rows through the selected AI provider (ChatGPT/DeepSeek) and fill the AI Summary / Linked Companies / Big Orders / Catalysts / Risks columns';
+      abtn.title = 'Run the first N rows through the selected AI provider (ChatGPT/DeepSeek) and fill the AI Summary / Linked Companies / Big Orders / Catalysts / Risks / Sector columns';
       abtn.addEventListener("click", () => runAiResearch(item, abtn, status));
       const ivBtn = document.createElement("button");
       ivBtn.className = "btn iv";
