@@ -26,6 +26,8 @@
     "button[data-testid=\"send-button\"]",
     "form button[type=\"submit\"]",
     "button[aria-label*=\"send\" i]",
+    "div[role=\"button\"][aria-label*=\"send\" i]",
+    "[class*=\"ds-icon-button\"][aria-label]",
   ];
   const STOP_SEL = [
     "button[data-testid=\"stop-button\"]",
@@ -39,6 +41,8 @@
     "[data-testid=\"assistant-message\"]",
     ".ds-markdown",
     ".markdown",
+    "[data-message-author-role=\"assistant\"]",
+    "[data-star=\"true\"]",
   ];
   const SEARCH_SEL = [
     "button#search-toggle",
@@ -87,19 +91,53 @@
         new InputEvent("input", { bubbles: true, data: text, inputType: "insertText" })
       );
     }
+    // Minimal typing simulation so React (controlled input) really registers the
+    // value — a single native "input" event is sometimes not enough to enable
+    // the send path on chat.deepseek.com.
+    try {
+      if (composer.tagName === "TEXTAREA" && document.execCommand) {
+        composer.value = "";
+        composer.dispatchEvent(new InputEvent("input", { bubbles: true, inputType: "insertText", data: text }));
+        composer.value = text;
+        composer.dispatchEvent(new InputEvent("input", { bubbles: true, inputType: "insertText", data: text }));
+      }
+    } catch (e) {}
     return true;
   }
 
-  function clickSendButton() {
+  function isSendDisabled(el) {
+    return !el || el.disabled === true || el.getAttribute("aria-disabled") === "true";
+  }
+
+  // Dispatch a realistic keyboard event so DeepSeek's React keydown handler
+  // fires. `.click()` on the plane icon alone does not always submit.
+  function pressEnterOn(composer) {
+    for (const ev of ["keydown", "keypress", "keyup"]) {
+      const e = new KeyboardEvent(ev, {
+        key: "Enter",
+        code: "Enter",
+        keyCode: 13,
+        which: 13,
+        bubbles: true,
+        cancelable: true,
+      });
+      composer.dispatchEvent(e);
+    }
+  }
+
+  function clickSendButton(composer) {
     for (const s of SEND_SEL) {
       const b = q(s);
-      if (!b || b.disabled || b.getAttribute("aria-disabled") === "true") continue;
-      if (visible(b) || s === "#send-button") {
-        b.click();
-        return true;
-      }
+      if (!b) continue;
+      const btn = b.tagName.toLowerCase() === "button" ? b : null;
+      const act = b.tagName.toLowerCase() === "button"
+        ? (btn.click && btn.click())
+        : (b.click && b.click());
+      void act;
     }
-    return false;
+    // DeepSeek sends on Enter even when no explicit send button is clickable.
+    if (composer) pressEnterOn(composer);
+    return true;
   }
 
   async function toggleWebSearch() {
@@ -115,7 +153,26 @@
     return false;
   }
 
+  const BLOCK_SNIPPETS = [
+    "unusual activity",
+    "please try again later",
+    "verify you are human",
+    "not a robot",
+    "security check",
+    "cf-chl",
+    "cf-challenge",
+    "access denied",
+    "forbidden",
+  ];
+
+  function detectBlocked() {
+    if (!document.body) return false;
+    const txt = document.body.innerText.toLowerCase().replace(/\s+/g, " ");
+    return BLOCK_SNIPPETS.some((s) => txt.includes(s));
+  }
+
   function extractLastAnswer() {
+    if (detectBlocked()) return "__BLOCKED__";
     for (const s of ANSWER_SEL) {
       const els = qa(s);
       if (els.length) return els[els.length - 1].innerText.trim();
@@ -219,14 +276,36 @@
         }
       })();
       if (!landed) return { ok: false, error: "Could not fill the DeepSeek composer." };
-      let clicked = false;
-      const t0 = Date.now();
-      while (Date.now() - t0 < 8000) {
-        if (clickSendButton()) { clicked = true; break; }
-        await sleep(600);
+      // Send the prompt and VERIFY it actually left the composer (DeepSeek clears
+      // the box and shows a user bubble the moment the message is submitted).
+      // Plugin-side .click() alone often does not commit; we click every candidate,
+      // then fire Enter on the focused composer, and confirm the composer emptied.
+      const composerClean = (() => {
+        try {
+          const v = composer.innerText != null ? composer.innerText : composer.value;
+          return !String(v || "").replace(/\s+/g, " ").trim();
+        } catch (e) {
+          return false;
+        }
+      })();
+      const sentT0 = Date.now();
+      let sent = false;
+      while (Date.now() - sentT0 < 15000) {
+        if (window.__dsAborted) return { ok: false, error: "Stopped before sending." };
+        clickSendButton(composer);
+        await sleep(900);
+        if (composerClean()) { sent = true; break; }
       }
-      if (!clicked) return { ok: false, error: "Send button not found on chat.deepseek.com." };
+      if (!sent) return { ok: false, error: "DeepSeek did not send the prompt (composer still has text)." };
       const text = await waitForCompletion(baselineText);
+      if (text === "__BLOCKED__")
+        return {
+          ok: false,
+          blocked: true,
+          error:
+            "DeepSeek is showing a security check. " +
+            "Open chat.deepseek.com in Chrome, complete the check, then run AI again.",
+        };
       if (!text) return { ok: false, error: "DeepSeek returned empty reply." };
       return { ok: true, text };
     },
