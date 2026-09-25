@@ -329,8 +329,47 @@
       }
       if (msg.action === "__dsGetLast") {
         const text = extractLastAnswer();
-        sendResponse({ ok: !!text, text });
+        sendResponse({ ok: !!text && text !== "__BLOCKED__", text });
         return;
+      }
+      if (msg.action === "__dsWaitResult") {
+        const baseline = msg.baseline || "";
+        const start = Date.now();
+        const timeoutMs = msg.timeoutMs || 240000;
+        (async () => {
+          while (Date.now() - start < 5000) await sleep(500); // let the page settle
+          while (Date.now() - start < 60000) {
+            if (extractLastAnswer() !== baseline && extractLastAnswer() !== "__BLOCKED__") break;
+            await sleep(800);
+          }
+          let reset = true;
+          const t0 = Date.now();
+          const deadline = t0 + timeoutMs;
+          let text = "";
+          while (Date.now() < deadline) {
+            if (window.__dsAborted) break;
+            const cur = extractLastAnswer();
+            if (cur === "__BLOCKED__") {
+              sendResponse({ blocked: true });
+              return;
+            }
+            const fresh = !!cur && cur !== baseline;
+            if (fresh) {
+              if (cur !== text) { text = cur; reset = true; }
+            }
+            if (!isGenerating() && fresh && reset) {
+              await sleep(3000);
+              const final = extractLastAnswer();
+              if (final === text && !isGenerating()) {
+                sendResponse({ ok: !!final, text: final });
+                return;
+              }
+            }
+            await sleep(800);
+          }
+          sendResponse({ ok: !!text, text });
+        })();
+        return true;
       }
     });
   }

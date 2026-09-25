@@ -55,6 +55,126 @@ function aiProviderCfg(p) {
   return AI_PROVIDERS[p] || AI_PROVIDERS.chatgpt;
 }
 
+// ---- chrome.debugger (CDP) real-input helpers -------------------------------
+// DeepSeek's React send handler rejects synthetic clicks/keys (checks
+// `isTrusted`). Drive the composer with REAL browser input events instead:
+// focus + clear the composer, `Input.insertText` types the prompt as genuine
+// keystrokes, then a real Enter key submits. This is indistinguishable from a
+// human typing.
+async function cdpFocusComposer(tabId) {
+  return await chrome.debugger.sendCommand(
+    { tabId },
+    "Runtime.evaluate",
+    {
+      returnByValue: true,
+      expression: `(() => {
+        const q = (s) => { try { return document.querySelector(s); } catch (e) { return null; } };
+        const vis = (e) => !!e && e.offsetParent !== null;
+        let c = q('textarea#chat-input');
+        if (!vis(c)) c = q('#chat-input');
+        if (!vis(c)) c = [...document.querySelectorAll('textarea')].filter(vis).pop() || null;
+        if (!vis(c)) c = [...document.querySelectorAll('div[contenteditable="true"]')].filter(vis).pop() || null;
+        if (!c) return { ok: false };
+        try { c.focus(); } catch (e) {}
+        try { c.scrollIntoView({ block: 'center' }); } catch (e) {}
+        if (c.tagName === 'TEXTAREA') {
+          const setter = Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, 'value').set;
+          setter.call(c, '');
+          c.dispatchEvent(new Event('input', { bubbles: true }));
+          try { c.setSelectionRange(0, 0); } catch (e) {}
+        } else {
+          c.innerHTML = '';
+          c.dispatchEvent(new InputEvent('input', { bubbles: true, inputType: 'deleteContentBackward' }));
+        }
+        return { ok: true };
+      })()`,
+    }
+  );
+}
+
+async function cdpToggleSearch(tabId) {
+  try {
+    await chrome.debugger.sendCommand(
+      { tabId },
+      "Runtime.evaluate",
+      {
+        returnByValue: true,
+        expression: `(() => {
+          const q = (s) => { try { return document.querySelector(s); } catch (e) { return null; } };
+          const vis = (e) => !!e && e.offsetParent !== null;
+          let b = q('button#search-toggle');
+          if (!vis(b)) b = q('button[data-testid="search-toggle"]');
+          if (!vis(b)) b = q('button[aria-label*="search the web" i]');
+          if (!b) return false;
+          const on = (b.getAttribute('aria-pressed') || '').toLowerCase() === 'true' ||
+                    (b.getAttribute('data-state') || '').toLowerCase() === 'checked';
+          if (!on) { b.click(); return 'toggled'; }
+          return 'already-on';
+        })()`,
+      }
+    );
+  } catch (e) {}
+}
+
+async function cdpTypeAndSend(tabId, prompt) {
+  try {
+    const focused = await cdpFocusComposer(tabId);
+    await sleep(400);
+    const ok = focused && focused.result && focused.result.value && focused.result.value.ok;
+    if (!ok) return { ok: false, error: "DeepSeek composer not found for CDP input." };
+    // Real trusted typing of the prompt into the focused inline editor.
+    await chrome.debugger.sendCommand(
+      { tabId },
+      "Input.insertText",
+      { text: prompt }
+    );
+    await sleep(500);
+    // Real Enter key: rawKeyDown then keyUp submits the message.
+    await chrome.debugger.sendCommand(
+      { tabId },
+      "Input.dispatchKeyEvent",
+      {
+        type: "rawKeyDown",
+        key: "Enter",
+        code: "Enter",
+        windowsVirtualKeyCode: 13,
+        nativeVirtualKeyCode: 13,
+        text: "\r",
+      }
+    );
+    await chrome.debugger.sendCommand(
+      { tabId },
+      "Input.dispatchKeyEvent",
+      {
+        type: "keyUp",
+        key: "Enter",
+        code: "Enter",
+        windowsVirtualKeyCode: 13,
+        nativeVirtualKeyCode: 13,
+      }
+    );
+    return { ok: true };
+  } catch (e) {
+    return { ok: false, error: `CDP send failed: ${e && e.message ? e.message : e}` };
+  }
+}
+
+async function cdpAttach(tabId) {
+  try {
+    await chrome.debugger.attach({ tabId }, "1.3");
+    return true;
+  } catch (e) {
+    // Detach any stale session (page navigation kills debugger sessions) and retry.
+    try { await chrome.debugger.detach({ tabId }); } catch (e2) {}
+    try {
+      await chrome.debugger.attach({ tabId }, "1.3");
+      return true;
+    } catch (e3) {
+      return false;
+    }
+  }
+}
+
 function cancelScrape() {
   stopRequested = true;
   if (activeAbort) {
@@ -2192,7 +2312,40 @@ async function handleChatGptAsk(prompt, opts, provider) {
     await restoreTab();
     return { success: false, error: cfg.notReady };
   }
-  const res = await chrome.tabs.sendMessage(tab.id, { action: cfg.askAction, prompt, opts }).catch(() => null);
+  let res;
+  if (p === "deepseek") {
+    // DeepSeek blocks synthetic clicks/keys, so drive the composer through the
+    // Chrome DevTools Protocol: real typed input + real Enter press.
+    try {
+      const attached = await cdpAttach(tab.id);
+      if (!attached) {
+        res = { error: "Could not attach the debugger to DeepSeek. Close other DevTools windows on that tab and retry." };
+      } else {
+        try {
+          const baseline = await chrome.tabs
+            .sendMessage(tab.id, { action: "__dsGetLast" })
+            .catch(() => null);
+          const bl = (baseline && baseline.ok && baseline.text) || "";
+          if (opts && opts.webSearch) await cdpToggleSearch(tab.id);
+          const sent = await cdpTypeAndSend(tab.id, prompt);
+          if (!sent.ok) {
+            res = { error: sent.error };
+          } else {
+            const waited = await chrome.tabs
+              .sendMessage(tab.id, { action: "__dsWaitResult", baseline: bl })
+              .catch(() => null);
+            res = waited || null;
+          }
+        } finally {
+          try { await chrome.debugger.detach({ tabId: tab.id }); } catch (e) {}
+        }
+      }
+    } catch (e) {
+      res = { error: `DeepSeek send failed: ${e && e.message ? e.message : e}` };
+    }
+  } else {
+    res = await chrome.tabs.sendMessage(tab.id, { action: cfg.askAction, prompt, opts }).catch(() => null);
+  }
   gptTabId = null;
   await restoreTab();
   if (res && res.ok) return { success: true, text: res.text };
