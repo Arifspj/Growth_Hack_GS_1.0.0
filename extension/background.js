@@ -2442,7 +2442,6 @@ async function runAiResearch(spreadsheetId, tabName, mode, maxRows, onProgress, 
 
   const rowsSet = parseRowSelector(maxRows);
   const targets = [];
-  const existing = grid.map((r) => r[aiCol] || "");
   for (let gi = 1; gi < grid.length; gi++) {
     if (stopRequested) break;
     const row = grid[gi];
@@ -2450,8 +2449,14 @@ async function runAiResearch(spreadsheetId, tabName, mode, maxRows, onProgress, 
     if (rowsSet && !rowsSet.has(sheetRow)) continue;
     const link = String((row && row[linkIdx]) || "").trim();
     if (!link) continue;
-    if (!rowsSet && mode !== "replace" && String(existing[gi] || "").trim()) continue; // already researched (all-mode only)
-    targets.push({ gi, link, name: String((row && row[nameIdx]) || link).trim(), row: row || [] });
+    const prevCells = row && row.length ? row.slice(aiCol, aiCol + AI_COLUMNS.length) : [];
+    // Append mode: re-run a row only when at least one AI cell is missing
+    // (e.g. adding a brand-new "AI Sector" column to already-researched rows).
+    // Rows whose EVERY AI cell already has data are skipped entirely.
+    const prevArr = prevCells.map((c) => String(c == null ? "" : c).trim());
+    const allFilled = prevArr.every((c) => !!c);
+    if (!rowsSet && mode !== "replace" && allFilled) continue;
+    targets.push({ gi, link, name: String((row && row[nameIdx]) || link).trim(), row: row || [], prev: prevArr });
   }
   const total = targets.length;
   onProgress({ type: "progress", status: "ai", label: tabName, message: `AI research queue: ${total} row(s). Each row takes ~20–90s.` });
@@ -2531,10 +2536,17 @@ async function runAiResearch(spreadsheetId, tabName, mode, maxRows, onProgress, 
         text = fresh;
       }
     }
-    if (!parsed) return { failed: true, error: "ChatGPT reply did not contain valid JSON — will retry." };
+    if (!parsed) return { failed: true, error: "AI reply did not contain valid JSON — will retry." };
     const cells = aiRowCells(parsed);
+    // Append mode: never clobber an existing AI cell — only the missing ones
+    // get written. So a re-run that adds e.g. "AI Sector" leaves the already
+    // good Summary/Linked/Orders/Catalysts/Risks untouched and fills Sector.
+    const merged =
+      mode === "append"
+        ? cells.map((c, i) => (t.prev[i] && t.prev[i].trim() ? t.prev[i] : c))
+        : cells;
     try {
-      await updateValues(spreadsheetId, `${rawTab}!${firstLetter}${t.gi + 1}:${lastLetter}${t.gi + 1}`, [cells]);
+      await updateValues(spreadsheetId, `${rawTab}!${firstLetter}${t.gi + 1}:${lastLetter}${t.gi + 1}`, [merged]);
     } catch (e) {
       return { failed: true, error: `sheet write: ${e.message}` };
     }
