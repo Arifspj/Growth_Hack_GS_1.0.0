@@ -2452,13 +2452,15 @@ async function runAiResearch(spreadsheetId, tabName, mode, maxRows, onProgress, 
     if (rowsSet && !rowsSet.has(sheetRow)) continue;
     const link = String((row && row[linkIdx]) || "").trim();
     if (!link) continue;
-    const prevCells = row && row.length ? row.slice(aiCol, aiCol + AI_COLUMNS.length) : [];
-    // Append mode: re-run a row only when at least one AI cell is missing
-    // (e.g. adding a brand-new "AI Sector" column to already-researched rows).
-    // Rows whose EVERY AI cell already has data are skipped entirely.
-    const prevArr = prevCells.map((c) => String(c == null ? "" : c).trim());
-    const allFilled = prevArr.every((c) => !!c);
-    if (!rowsSet && mode !== "replace" && allFilled) continue;
+    // Append mode: skip rows that are ACTUALLY complete = first (AI Summary)
+    // and last (AI Sector) AI cells both filled. Middle cells (Linked Companies,
+    // Big Orders) legitimately stay empty when the AI found nothing, so requiring
+    // EVERY cell filled would re-run every row on every pass.
+    const prevArr = AI_COLUMNS.map((_, k) =>
+      String((row && row[aiCol + k] == null ? "" : (row && row[aiCol + k])) || "").trim()
+    );
+    const complete = !!(prevArr[0] && prevArr[prevArr.length - 1]);
+    if (!rowsSet && mode !== "replace" && complete) continue;
     targets.push({ gi, link, name: String((row && row[nameIdx]) || link).trim(), row: row || [], prev: prevArr });
   }
   const total = targets.length;
