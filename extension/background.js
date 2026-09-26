@@ -642,6 +642,7 @@ async function snapshotCompanyPage(url) {
         chrome.tabs.sendMessage(tab.id, { type: "extract_page" }).catch(() => null),
         5000
       ).catch(() => null);
+      if (is404PageHtml(resp && resp.html)) return null;
       if (resp && resp.html && resp.href && String(resp.href).split("#")[0] === want) {
         lastHtml = resp.html;
         // Newer Screener pages render the top-ratios via JS/API (server HTML has
@@ -1549,6 +1550,23 @@ function standaloneUrl(link) {
   return u.replace(/\/consolidated\/?$/i, "") + "/";
 }
 
+// Screener renders the raw screen's "Link" for brand-new IPO listings as a
+// placeholder (https://www.screener.in/company/id/) until a company page exists.
+// These resolve to 404 and can never be scraped, so detect and skip them fast
+// instead of burning the ~50s snapshot wait on a dead URL.
+function isPlaceholderCompanyUrl(url) {
+  const m = String(url || "").match(/\/company\/([^/?#]+)/i);
+  return !m || !m[1] || /^id$/i.test(m[1]);
+}
+
+// True when the DOM looks like a Screener 404 page ("Error 404: Page Not Found").
+function is404PageHtml(html) {
+  if (!html) return false;
+  if (html.length > 25000) return false;
+  const t = html.match(/<title[^>]*>([^<]*)<\/title>/i);
+  return !!t && /404|page not found/i.test(t[1]);
+}
+
 // True when #top-ratios actually contains numeric values. Newer Screener pages
 // ship an empty <span class="number"></span> server-side and only fill the numbers
 // via JS/API after load; a page that still has empty number spans yields a blank
@@ -1765,6 +1783,20 @@ async function scrapeDetails(spreadsheetId, tabName, mode, maxRows, onProgress) 
     }
     const url = consolidatedUrl(link);
     const name = String((row && row[1]) || link).trim();
+    // New-IPO placeholder links (/company/id/) have no company page yet → would
+    // waste ~50s (25s snapshot × 2 rebuilds) then 404. Skip them instantly.
+    if (isPlaceholderCompanyUrl(link)) {
+      skipped++;
+      onProgress({
+        type: "progress",
+        status: "details",
+        label: tabName,
+        done: n,
+        total,
+        message: `Details ${n}/${total} — ${name}: skipped (new IPO — no Screener page yet)`,
+      });
+      continue;
+    }
 onProgress({
         type: "progress",
         status: "details",
