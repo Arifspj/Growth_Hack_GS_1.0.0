@@ -1690,7 +1690,7 @@ async function scrapeDetails(spreadsheetId, tabName, mode, maxRows, onProgress) 
   // Read the full used grid so a previous Details/append run with columns far
   // beyond N is still seen (startCol detection + append must never be off by the
   // "only read up to N" mistake).
-  const [gridInfo, grid, warmOk] = await Promise.all([
+  let [gridInfo, grid, warmOk] = await Promise.all([
     getSheetGridInfo(spreadsheetId, rawTab),
     (async () => {
       try {
@@ -1725,6 +1725,59 @@ async function scrapeDetails(spreadsheetId, tabName, mode, maxRows, onProgress) 
   const linkIdx = headerRow.findIndex((h) => normLabel(h) === "link");
   if (linkIdx < 0) {
     throw new Error(`Tab "${rawTab}" has no "Link" column — run the main scrape first (it writes links in col M).`);
+  }
+  // ---- delete duplicate rows (same company/link) before scraping ----
+  // Keep the first occurrence; delete later copies so a re-run doesn't scrape
+  // or overwrite the same company twice. Logs each as "IRCTC Row 12 duplicated deleted".
+  {
+    const seenLinks = new Map();
+    const seenNames = new Map();
+    const dupSheetRows = [];
+    for (let gi = 1; gi < grid.length; gi++) {
+      const row = grid[gi];
+      const link = String((row && row[linkIdx]) || "").trim();
+      const coName = String((row && row[1]) || "").trim();
+      const isDup = (link && seenLinks.has(link)) || (coName && seenNames.has(coName));
+      if (isDup) {
+        dupSheetRows.push({ sheetRow: gi + 1, coName: coName || link || `Row ${gi + 1}` });
+        continue;
+      }
+      if (link) seenLinks.set(link, gi + 1);
+      if (coName) seenNames.set(coName, gi + 1);
+    }
+    if (dupSheetRows.length) {
+      const g = await getSheetGridInfo(spreadsheetId, rawTab);
+      // delete bottom-up in ONE batch so earlier row indexes stay valid
+      await sheetsJson(`${spreadsheetId}:batchUpdate`, {
+        method: "POST",
+        body: {
+          requests: [...dupSheetRows]
+            .sort((a, b) => b.sheetRow - a.sheetRow)
+            .map((d) => ({
+              deleteDimension: {
+                range: {
+                  sheetId: g.sheetId,
+                  dimension: "ROWS",
+                  startIndex: d.sheetRow - 1,
+                  endIndex: d.sheetRow,
+                },
+              },
+            })),
+        },
+      });
+      // keep accounts straight: mirror the deletion locally so sheetRow mapping
+      // later still points at the correct (post-delete) rows
+      const delSet = new Set(dupSheetRows.map((d) => d.sheetRow));
+      grid = grid.filter((r, i) => !delSet.has(i + 1));
+      for (const d of dupSheetRows) {
+        onProgress({
+          type: "progress",
+          status: "details",
+          label: tabName,
+          message: `${d.coName} Row ${d.sheetRow} duplicated deleted`,
+        });
+      }
+    }
   }
   let startCol = headerRow.length;
   const probe = normLabel(DETAIL_FIELDS[0][1]);
