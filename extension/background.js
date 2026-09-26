@@ -1551,12 +1551,42 @@ function standaloneUrl(link) {
 }
 
 // Screener renders the raw screen's "Link" for brand-new IPO listings as a
-// placeholder (https://www.screener.in/company/id/) until a company page exists.
-// These resolve to 404 and can never be scraped, so detect and skip them fast
-// instead of burning the ~50s snapshot wait on a dead URL.
+// placeholder (https://www.screener.in/company/id/) until a company page gets a
+// slug. The page DOES exist — under /company/id/<numericId>/ — so instead of
+// skipping these we resolve the real URL via Screener's company search API.
 function isPlaceholderCompanyUrl(url) {
   const m = String(url || "").match(/\/company\/([^/?#]+)/i);
-  return !m || !m[1] || /^id$/i.test(m[1]);
+  return !!m && /^id$/i.test(m[1]);
+}
+
+// Resolve a placeholder /company/id/ link to the real numeric company URL.
+// Screener's company-search endpoint returns the exact page URL for a name.
+async function resolveCompanyIdUrl(name) {
+  const q = String(name || "").trim();
+  if (!q) return null;
+  const api = `https://www.screener.in/api/company/search/?q=${encodeURIComponent(q)}&v=5&fts=1`;
+  try {
+    const text = await fetchWithRetry(api, { retries: 1, baseDelay: 500, timeoutMs: 10000 });
+    const items = JSON.parse(text);
+    if (!Array.isArray(items)) return null;
+    const norm = (s) => String(s || "").toLowerCase().replace(/[^a-z0-9]+/g, "");
+    const qn = norm(q);
+    let best = null;
+    let bestScore = 0;
+    for (const it of items) {
+      if (!it || it.id == null || !it.url) continue;
+      if (!/\/company\/(id\/\d+|id)/.test(it.url)) continue; // only numeric-ID pages we're missing
+      const n = norm(it.name);
+      const score = n === qn ? 3 : n.startsWith(qn) ? 2 : n.includes(qn) || qn.startsWith(n) ? 1 : 0;
+      if (score > bestScore) {
+        bestScore = score;
+        best = it.url;
+      }
+    }
+    return best || null;
+  } catch {
+    return null;
+  }
 }
 
 // True when the DOM looks like a Screener 404 page ("Error 404: Page Not Found").
@@ -1781,21 +1811,31 @@ async function scrapeDetails(spreadsheetId, tabName, mode, maxRows, onProgress) 
         continue;
       }
     }
-    const url = consolidatedUrl(link);
+    const url0 = consolidatedUrl(link);
     const name = String((row && row[1]) || link).trim();
-    // New-IPO placeholder links (/company/id/) have no company page yet → would
-    // waste ~50s (25s snapshot × 2 rebuilds) then 404. Skip them instantly.
+    // New-IPO placeholder links (/company/id/) have no slug, but the page exists
+    // at /company/id/<numericId>/. Resolve it once via Screener's search API so
+    // these rows aren't dropped (they'd otherwise 404 after a ~50s wait).
+    let url = url0;
     if (isPlaceholderCompanyUrl(link)) {
-      skipped++;
-      onProgress({
-        type: "progress",
-        status: "details",
-        label: tabName,
-        done: n,
-        total,
-        message: `Details ${n}/${total} — ${name}: skipped (new IPO — no Screener page yet)`,
-      });
-      continue;
+      const resolved = await resolveCompanyIdUrl(name).catch(() => null);
+      if (resolved) {
+        url =
+          /^https?:\/\//i.test(resolved)
+            ? String(resolved).replace(/\/consolidated\/?$/, "")
+            : `https://www.screener.in${String(resolved).replace(/\/consolidated\/?$/, "")}`;
+      } else {
+        skipped++;
+        onProgress({
+          type: "progress",
+          status: "details",
+          label: tabName,
+          done: n,
+          total,
+          message: `Details ${n}/${total} — ${name}: skipped (new IPO — could not resolve Screener page)`,
+        });
+        continue;
+      }
     }
 onProgress({
         type: "progress",
