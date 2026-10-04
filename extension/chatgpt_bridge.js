@@ -260,6 +260,41 @@
     return extractTail(everSeenFresh && lastText ? lastText : "", baselineText);
   }
 
+  // TikTok: several rows accumulate in ONE ChatGPT thread, and a row's reply can
+  // then read a previous row's assistant message (wrong/random answers). Starting
+  // a fresh conversation before every ask gives each row a clean thread, so the
+  // last assistant message is ALWAYS and ONLY that row's answer.
+  async function resetConversation() {
+    const newChatSelectors = [
+      "a[href=\"/new\"]",
+      "a[href=\"/new/\"]",
+      "button[aria-label*=\"New chat\" i]",
+      "#new-chat-button",
+      "button[id=\"nav-item-new-chat\"]",
+      "a[data-testid=\"notion-link\"]",
+    ];
+    const t0 = Date.now();
+    let clicked = false;
+    while (Date.now() - t0 < 25000) {
+      for (const s of newChatSelectors) {
+        const el = document.querySelector(s);
+        if (el && el.offsetParent !== null) {
+          el.click();
+          clicked = true;
+          break;
+        }
+      }
+      if (clicked) break;
+      await sleep(700);
+    }
+    if (!clicked) return false; // no New-chat button — caller falls back to current thread
+    // Wait for the fresh thread's composer to appear, then clear the baseline so
+    // the previous thread's text can never be treated as this row's answer.
+    const fresh = await waitForComposer(30000);
+    window.__gptLastBaseline = "";
+    return !!fresh;
+  }
+
   window.__gptAssistant = {
     queue: Promise.resolve(),
     ask: async (prompt, opts) => {
@@ -285,6 +320,8 @@
             "Open chatgpt.com in Chrome, solve the CAPTCHA, then run AI again.",
         };
       const useSearch = opts && opts.webSearch !== false;
+      // Fresh thread per row: never let previous rows' Q&A bleed into this one.
+      await resetConversation();
       const composer = await waitForComposer();
       if (!composer) {
         if (detectBlocked())
