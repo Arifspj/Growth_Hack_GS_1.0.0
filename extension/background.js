@@ -2632,14 +2632,39 @@ async function runAiResearch(spreadsheetId, tabName, mode, maxRows, onProgress, 
     const prompt = buildAiResearchPrompt(detail);
     const providerLabel = aiProviderCfg(aiProvider).label;
       onProgress({ type: "progress", status: "ai", label: tabName, done: ordinal + 1, total, message: `AI ${ordinal + 1}/${total} — ${t.name} (${providerLabel} researching…)` });
+    const resT0 = Date.now();
     let res;
     try {
-      res = await Promise.race([
-        handleChatGptAsk(prompt, { webSearch: true }, aiProvider),
-        new Promise((_, rej) => setTimeout(() => rej(new Error("AI timeout (260s)")), 260000)),
-      ]);
+      // Heartbeat: a long ChatGPT answer can take 60–240s; update the label
+      // every 20s so the run never reads as "hung on researching…".
+      const hb = setInterval(() => {
+        onProgress({
+          type: "progress",
+          status: "ai",
+          label: tabName,
+          done: ordinal + 1,
+          total,
+          message: `AI ${ordinal + 1}/${total} — ${t.name} (${providerLabel} researching… ${Math.round((Date.now() - resT0) / 1000)}s)`,
+        });
+      }, 20000);
+      try {
+        res = await Promise.race([
+          handleChatGptAsk(prompt, { webSearch: true }, aiProvider),
+          new Promise((_, rej) => setTimeout(() => rej(new Error("AI timeout (260s)")), 260000)),
+        ]);
+      } finally {
+        clearInterval(hb);
+      }
     } catch (e) {
       if (stopRequested) return "stopped";
+      // Unblock the provider tab: the row that hit the timeout may still have
+      // its bridge parked in waitForCompletion, and the bridge's ask-queue is
+      // serialized — without this abort every following row would wait behind
+      // it and the whole run degenerates into one timeout after another.
+      try {
+        const cfg = aiProviderCfg(aiProvider);
+        await chrome.tabs.sendMessage(gptTabId, { action: cfg.abortAction }).catch(() => null);
+      } catch (e2) {}
       return { failed: true, error: e.message || String(e) };
     }
     if (stopRequested) return "stopped";

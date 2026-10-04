@@ -115,21 +115,32 @@
   }
 
   function extractLastAnswer() {
-    const roleMsgs = Array.from(
-      document.querySelectorAll("main [data-message-author-role=\"assistant\"]")
-    );
-    if (roleMsgs.length) {
-      const last = roleMsgs[roleMsgs.length - 1];
-      const md = last.querySelector(".markdown") || last;
-      return md.innerText.trim();
+    // Try the classic assistant-message selectors first (markdown within a
+    // [data-message-author-role="assistant"] node).
+    const roleSels = [
+      "main [data-message-author-role=\"assistant\"] .markdown",
+      "main [data-message-author-role=\"assistant\"]",
+      "[data-message-author-role=\"assistant\"] .markdown",
+      ".conversation-container .markdown",
+    ];
+    for (const s of roleSels) {
+      const found = document.querySelectorAll(s);
+      if (found.length) {
+        const last = found[found.length - 1];
+        const t = last && last.innerText ? last.innerText.trim() : "";
+        if (t) return t;
+      }
     }
-    const anyMds = Array.from(
-      document.querySelectorAll(
-        "[data-message-author-role=\"assistant\"] .markdown, main .markdown, .conversation-container .markdown"
-      )
-    );
-    if (anyMds.length) return anyMds[anyMds.length - 1].innerText.trim();
-    return "";
+    // Robust fallback: whatever ChatGPT changed in its DOM, the fresh answer is
+    // always rendered inside <main>. Returning the whole main text guarantees a
+    // reply is never missed (extractAiJson in the background digs out the JSON).
+    const main = document.querySelector("main");
+    if (main) {
+      const t = main.innerText ? main.innerText.trim() : "";
+      if (t) return t;
+    }
+    const anyMd = document.querySelector(".markdown");
+    return anyMd && anyMd.innerText ? anyMd.innerText.trim() : "";
   }
 
   async function waitForComposer(timeoutMs = 45000) {
@@ -142,10 +153,37 @@
     return null;
   }
 
+  // Modern ChatGPT hides the stop button via CSS but LEAVES it in the DOM, so
+  // plain querySelector always finds it and the done-check never fires. Only
+  // count a button that is actually visible on screen (offsetParent + rects).
+  function visibleStopButton() {
+    const els = document.querySelectorAll(
+      "button[data-testid=\"stop-button\"], button[aria-label*=\"Stop generating\" i]"
+    );
+    for (const el of els) {
+      if (el.offsetParent !== null || (el.getClientRects && el.getClientRects().length)) return el;
+    }
+    return null;
+  }
+
+  // When generation finishes ChatGPT swaps the stop button back to the send
+  // button, so a visible send button is a strong "answer is done" signal.
+  const SEND_BTN_SEL = [
+    "button[data-testid=\"send-button\"]",
+    "button[aria-label=\"Send\"]",
+    "button[aria-label=\"Send message\"]",
+    "form button[type=\"submit\"]",
+  ];
+  function sendVisible() {
+    for (const s of SEND_BTN_SEL) {
+      const b = document.querySelector(s);
+      if (b && b.offsetParent !== null) return true;
+    }
+    return false;
+  }
+
   async function waitForCompletion(baselineText) {
     const deadline = Date.now() + 240000;
-    const stopBtnSel =
-      "button[data-testid=\"stop-button\"], button[aria-label*=\"Stop generating\" i]";
     let lastText = "";
     let stableSince = 0;
     let everSeenFresh = false;
@@ -153,7 +191,7 @@
     while (Date.now() < deadline) {
       if (window.__gptAborted) return "";
       if (detectBlocked()) return "__BLOCKED__";
-      const stopBtn = document.querySelector(stopBtnSel);
+      const stopBtn = visibleStopButton();
       const txt = extractLastAnswer();
       const fresh = !!txt && txt !== baselineText;
       if (fresh && !everSeenFresh) {
@@ -164,8 +202,9 @@
         lastText = txt;
         stableSince = Date.now();
       }
-      // Done = generation finished (no stop button) AND answer is fresh and stable.
-      const done = !stopBtn && everSeenFresh && Date.now() - stableSince >= 2500;
+      // Done = generation finished (no VISIBLE stop button, or the send button is
+      // back) AND the answer is fresh and has been stable for 2.5s.
+      const done = (!stopBtn || sendVisible()) && everSeenFresh && Date.now() - stableSince >= 2500;
       if (done) return txt;
       await sleep(800);
     }
