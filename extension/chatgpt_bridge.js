@@ -265,34 +265,36 @@
   // a fresh conversation before every ask gives each row a clean thread, so the
   // last assistant message is ALWAYS and ONLY that row's answer.
   async function resetConversation() {
+    // A fresh ChatGPT thread ALWAYS lives at the root path (chatgpt.com/),
+    // never under /c/<thread-id>. Using the URL (not DOM heuristics) is the
+    // deterministic proof that we really are on a new conversation.
+    const isFreshThread = () => !/\/c\//.test(location.pathname);
+    if (isFreshThread()) return true; // already clean (nothing sent yet)
+
     const newChatSelectors = [
       "a[href=\"/new\"]",
       "a[href=\"/new/\"]",
-      "button[aria-label*=\"New chat\" i]",
+      "button[aria-label*=\"New chat\"]",
+      "a[aria-label*=\"New chat\"]",
       "#new-chat-button",
       "button[id=\"nav-item-new-chat\"]",
       "a[data-testid=\"notion-link\"]",
     ];
+    const visible = (el) => !!el && (el.getClientRects().length > 0 || el.offsetParent !== null);
     const t0 = Date.now();
-    let clicked = false;
-    while (Date.now() - t0 < 25000) {
+    while (Date.now() - t0 < 25000 && !isFreshThread()) {
       for (const s of newChatSelectors) {
         const el = document.querySelector(s);
-        if (el && el.offsetParent !== null) {
-          el.click();
-          clicked = true;
-          break;
-        }
+        if (visible(el)) el.click();
       }
-      if (clicked) break;
-      await sleep(700);
+      // Give the new thread a beat to render, then check the URL again.
+      await sleep(600);
     }
-    if (!clicked) return false; // no New-chat button — caller falls back to current thread
-    // Wait briefly for the fresh thread's composer so the send that follows acts on
-    // the new thread. Baseline is cleared so old-thread text can never leak in.
-    const fresh = await waitForComposer(8000);
+    if (!isFreshThread()) return false; // could not escape the old thread
+    // Small wait so the fresh thread's composer is present before we fill it.
+    await waitForComposer(10000);
     window.__gptLastBaseline = "";
-    return !!fresh;
+    return true;
   }
 
   window.__gptAssistant = {
@@ -321,7 +323,15 @@
         };
       const useSearch = opts && opts.webSearch !== false;
       // Fresh thread per row: never let previous rows' Q&A bleed into this one.
-      await resetConversation();
+      // If we cannot reach a fresh thread (no New-chat button / navigation stuck),
+      // DO NOT send in the old thread — the answer would bind to the wrong row.
+      if (!(await resetConversation())) {
+        return {
+          ok: false,
+          error:
+            "Could not start a fresh ChatGPT conversation. Click \"New chat\" on chatgpt.com manually and make sure the left sidebar is loaded, then run AI again.",
+        };
+      }
       const composer = await waitForComposer();
       if (!composer) {
         if (detectBlocked())
