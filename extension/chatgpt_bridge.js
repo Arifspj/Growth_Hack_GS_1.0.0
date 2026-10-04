@@ -182,6 +182,19 @@
     return false;
   }
 
+  // ChatGPT appends each new answer to the end of <main>. Given the text we
+  // captured BEFORE sending (baseline), slice off everything before it so only
+  // THIS row's fresh reply is returned — never stale JSON from earlier rows.
+  function extractTail(text, base) {
+    const t = String(text || "");
+    const b = String(base || "");
+    if (b && t.startsWith(b)) {
+      const tail = t.slice(b.length).trim();
+      if (tail) return tail;
+    }
+    return t.trim();
+  }
+
   async function waitForCompletion(baselineText) {
     const deadline = Date.now() + 240000;
     let lastText = "";
@@ -205,11 +218,11 @@
       // Done = generation finished (no VISIBLE stop button, or the send button is
       // back) AND the answer is fresh and has been stable for 2.5s.
       const done = (!stopBtn || sendVisible()) && everSeenFresh && Date.now() - stableSince >= 2500;
-      if (done) return txt;
+      if (done) return extractTail(txt, baselineText);
       await sleep(800);
     }
     // Timeout: return whatever fresh text did stream in (never the stale baseline).
-    return everSeenFresh && lastText ? lastText : "";
+    return extractTail(everSeenFresh && lastText ? lastText : "", baselineText);
   }
 
   window.__gptAssistant = {
@@ -267,7 +280,6 @@
       if (!(await waitSendIdle()))
         return { ok: false, error: "ChatGPT is taking too long to finish the previous reply." };
 
-      const baselineText = extractLastAnswer();
       if (useSearch) {
         try {
           await toggleWebSearch();
@@ -291,7 +303,13 @@
         await sleep(600);
       }
       if (!clicked) return { ok: false, error: "Send button not found on chatgpt.com." };
-      const text = await waitForCompletion(baselineText);
+      // Baseline must be captured AFTER the user message is in <main> — capturing
+      // it before send makes the freshly-posted prompt look like a "fresh answer"
+      // and done fires on the user message (JSON missing → endless re-send).
+      await sleep(1500);
+      const baseAfterSend = extractLastAnswer();
+      window.__gptLastBaseline = baseAfterSend;
+      const text = await waitForCompletion(baseAfterSend);
       if (text === "__BLOCKED__")
         return {
           ok: false,
@@ -322,7 +340,7 @@
         return true;
       }
       if (msg.action === "__gptGetLast") {
-        const text = extractLastAnswer();
+        const text = extractTail(extractLastAnswer(), window.__gptLastBaseline || "");
         sendResponse({ ok: !!text, text });
         return;
       }

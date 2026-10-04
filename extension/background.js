@@ -2370,31 +2370,39 @@ function extractAiJson(text) {
       .replace(/[\r\n]+/g, " ")
       .replace(/,\s*([}\]])/g, "$1")
       .replace(/\s+/g, " ");
-  const extractJson = (s) => {
-    const start = s.indexOf("{");
-    if (start === -1) return null;
-    let depth = 0, inStr = false, esc = false;
-    for (let i = start; i < s.length; i++) {
-      const ch = s[i];
-      if (esc) { esc = false; continue; }
-      if (ch === "\\") { esc = true; continue; }
-      if (inStr) { if (ch === '"') inStr = false; continue; }
-      if (ch === '"') { inStr = true; continue; }
-      if (ch === "{") depth++;
-      else if (ch === "}") {
-        depth--;
-        if (depth === 0) return s.slice(start, i + 1);
+  // Collect every balanced {...} block and try them in order, outermost first;
+  // a ChatGPT tail usually has ONE JSON object but may be wrapped in prose.
+  const allJson = (s) => {
+    const out = [];
+    let i = 0;
+    while (i < s.length) {
+      const start = s.indexOf("{", i);
+      if (start === -1) break;
+      let depth = 0, inStr = false, esc = false, j;
+      for (j = start; j < s.length; j++) {
+        const ch = s[j];
+        if (esc) { esc = false; continue; }
+        if (ch === "\\") { esc = true; continue; }
+        if (inStr) { if (ch === '"') inStr = false; continue; }
+        if (ch === '"') { inStr = true; continue; }
+        if (ch === "{") depth++;
+        else if (ch === "}") {
+          depth--;
+          if (depth === 0) break;
+        }
       }
+      if (depth !== 0) break;
+      out.push(s.slice(start, j + 1));
+      i = j + 1;
     }
-    return null;
+    return out;
   };
   const str = String(text || "");
   const candidates = [];
   const fenced = str.match(/```(?:json)?\s*([\s\S]*?)```/i);
   if (fenced) candidates.push(fenced[1]);
-  const extracted = extractJson(str);
-  if (extracted) candidates.push(extracted);
-  candidates.push(str);
+  candidates.push(...allJson(str));
+  if (!candidates.length || !candidates.find((c) => c.trim().startsWith("{"))) candidates.push(str);
   for (const c of candidates) {
     const variants = c.trim() ? [c.trim(), clean(c)] : [];
     for (const v of variants) {
@@ -2691,7 +2699,10 @@ async function runAiResearch(spreadsheetId, tabName, mode, maxRows, onProgress, 
         text = fresh;
       }
     }
-    if (!parsed) return { failed: true, error: "AI reply did not contain valid JSON — will retry." };
+    if (!parsed) {
+      const snippet = String(text || "").replace(/\s+/g, " ").slice(0, 180);
+      return { failed: true, error: `AI reply did not contain valid JSON — will retry. Reply: ${snippet || "(empty)"}` };
+    }
     const cells = aiRowCells(parsed);
     // Append mode: never clobber an existing AI cell — only the missing ones
     // get written. So a re-run that adds e.g. "AI Sector" leaves the already
