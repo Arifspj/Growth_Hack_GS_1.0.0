@@ -149,12 +149,12 @@
     return "";
   }
 
-  async function waitForComposer(timeoutMs = 45000) {
+  async function waitForComposer(timeoutMs = 20000) {
     const t0 = Date.now();
     while (Date.now() - t0 < timeoutMs) {
       const c = findComposer();
       if (c) return c;
-      await sleep(700);
+      await sleep(200);
     }
     return null;
   }
@@ -254,7 +254,7 @@
       // a quiet mid-stream gap, which used to return a truncated/previous answer.
       const done = (!stopBtn || sendVisible()) && everSeenFresh && hasBalancedJson(txt) && Date.now() - stableSince >= 2500;
       if (done) return extractTail(txt, baselineText);
-      await sleep(800);
+      await sleep(350);
     }
     // Timeout: return whatever fresh text did stream in (never the stale baseline).
     return extractTail(everSeenFresh && lastText ? lastText : "", baselineText);
@@ -288,9 +288,9 @@
       await sleep(700);
     }
     if (!clicked) return false; // no New-chat button — caller falls back to current thread
-    // Wait for the fresh thread's composer to appear, then clear the baseline so
-    // the previous thread's text can never be treated as this row's answer.
-    const fresh = await waitForComposer(30000);
+    // Wait briefly for the fresh thread's composer so the send that follows acts on
+    // the new thread. Baseline is cleared so old-thread text can never leak in.
+    const fresh = await waitForComposer(8000);
     window.__gptLastBaseline = "";
     return !!fresh;
   }
@@ -345,7 +345,7 @@
             "button[data-testid=\"stop-button\"], button[aria-label*=\"Stop generating\" i]"
           );
           if (!stopBtn) return true;
-          await sleep(1200);
+          await sleep(400);
         }
         return false;
       };
@@ -358,7 +358,7 @@
         } catch (e) {}
       }
       setComposer(composer, prompt);
-      await sleep(500);
+      await sleep(180);
       // Only click send if our text actually landed in the composer.
       const landed = (() => {
         try {
@@ -375,10 +375,10 @@
         await sleep(600);
       }
       if (!clicked) return { ok: false, error: "Send button not found on chatgpt.com." };
-      // Baseline must be captured AFTER the user message is in <main> — capturing
-      // it before send makes the freshly-posted prompt look like a "fresh answer"
-      // and done fires on the user message (JSON missing → endless re-send).
-      await sleep(1500);
+      // Fresh thread per row, and extractLastAnswer() reads ONLY assistant nodes —
+      // the just-sent user prompt is a user node, so there is nothing to baseline
+      // away and done never fires on the prompt itself. Capture the baseline right
+      // after send (empty on a fresh thread) and start polling immediately.
       const baseAfterSend = extractLastAnswer();
       window.__gptLastBaseline = baseAfterSend;
       const text = await waitForCompletion(baseAfterSend);
