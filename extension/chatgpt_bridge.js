@@ -115,12 +115,22 @@
   }
 
   function extractLastAnswer() {
-    // Try the classic assistant-message selectors first (markdown within a
-    // [data-message-author-role="assistant"] node).
+    // Source of truth: the LAST assistant message node. Each ChatGPT version
+    // keeps one node per message with data-message-author-role="assistant" —
+    // returning that single node (never the whole <main>) is what prevents a
+    // stale/previous-row reply from leaking into this row's write.
+    const roleNodes = Array.from(
+      document.querySelectorAll('[data-message-author-role="assistant"]')
+    );
+    if (roleNodes.length) {
+      const last = roleNodes[roleNodes.length - 1];
+      const md = last.querySelector(".markdown") || last;
+      const t = md && md.innerText ? md.innerText.trim() : "";
+      if (t) return t;
+    }
+    // Fallback selectors (only if the role attribute is absent from this layout).
     const roleSels = [
       "main [data-message-author-role=\"assistant\"] .markdown",
-      "main [data-message-author-role=\"assistant\"]",
-      "[data-message-author-role=\"assistant\"] .markdown",
       ".conversation-container .markdown",
     ];
     for (const s of roleSels) {
@@ -131,16 +141,12 @@
         if (t) return t;
       }
     }
-    // Robust fallback: whatever ChatGPT changed in its DOM, the fresh answer is
-    // always rendered inside <main>. Returning the whole main text guarantees a
-    // reply is never missed (extractAiJson in the background digs out the JSON).
     const main = document.querySelector("main");
     if (main) {
       const t = main.innerText ? main.innerText.trim() : "";
       if (t) return t;
     }
-    const anyMd = document.querySelector(".markdown");
-    return anyMd && anyMd.innerText ? anyMd.innerText.trim() : "";
+    return "";
   }
 
   async function waitForComposer(timeoutMs = 45000) {
@@ -195,6 +201,33 @@
     return t.trim();
   }
 
+  // True when the text contains at least one balanced { ... } object. ChatGPT is
+  // told to output ONE JSON object, so as soon as a closing brace lands the reply
+  // is effectively complete — this stops premature "done" during mid-stream quiet
+  // gaps that used to capture a truncated/stale answer.
+  function hasBalancedJson(text) {
+    const s = String(text || "");
+    let start = -1;
+    for (let i = 0; i < s.length; i++) {
+      if (s[i] === "{") { start = i; break; }
+    }
+    if (start === -1) return false;
+    let depth = 0, inStr = false, esc = false;
+    for (let i = start; i < s.length; i++) {
+      const ch = s[i];
+      if (esc) { esc = false; continue; }
+      if (ch === "\\") { esc = true; continue; }
+      if (inStr) { if (ch === '"') inStr = false; continue; }
+      if (ch === '"') { inStr = true; continue; }
+      if (ch === "{") depth++;
+      else if (ch === "}") {
+        depth--;
+        if (depth === 0) return true;
+      }
+    }
+    return false;
+  }
+
   async function waitForCompletion(baselineText) {
     const deadline = Date.now() + 240000;
     let lastText = "";
@@ -216,8 +249,10 @@
         stableSince = Date.now();
       }
       // Done = generation finished (no VISIBLE stop button, or the send button is
-      // back) AND the answer is fresh and has been stable for 2.5s.
-      const done = (!stopBtn || sendVisible()) && everSeenFresh && Date.now() - stableSince >= 2500;
+      // back) AND the answer is fresh, is a COMPLETE balanced JSON object, and has
+      // been stable for 2.5s. Requiring balanced JSON stops "done" from firing on
+      // a quiet mid-stream gap, which used to return a truncated/previous answer.
+      const done = (!stopBtn || sendVisible()) && everSeenFresh && hasBalancedJson(txt) && Date.now() - stableSince >= 2500;
       if (done) return extractTail(txt, baselineText);
       await sleep(800);
     }

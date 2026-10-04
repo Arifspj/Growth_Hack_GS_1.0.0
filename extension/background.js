@@ -2353,7 +2353,7 @@ const buildAiResearchPrompt = (d) => {
     "- Reply with ONLY ONE valid JSON object. Nothing before and nothing after it.",
     "- Do NOT use markdown code fences (no ```) and do NOT append any footnote / link list after the JSON.",
     '- Exact shape:',
-    '{"summary":"\u22642 short sentences","sector":{"name":"company sector","tailwind":true or false,"reason":"why this sector is or is not a tailwind (structural-shift) sector, one short line"},"linkedCompanies":[{"name":"company/group","relation":"how linked, one short line","source":"url if any else blank"}],"bigOrders":[{"desc":"what won, one short line","value":"value if known else blank","date":"when if known else blank","source":"url if any else blank"}],"catalysts":[{"point":"trigger with logic, one short line","source":"url if any else blank"}],"risks":[{"point":"risk, one short line","source":"url if any else blank"}]}',
+    '{"company":"<exact company name from the Base data above, verbatim>","summary":"\u22642 short sentences","sector":{"name":"company sector","tailwind":true or false,"reason":"why this sector is or is not a tailwind (structural-shift) sector, one short line"},"linkedCompanies":[{"name":"company/group","relation":"how linked, one short line","source":"url if any else blank"}],"bigOrders":[{"desc":"what won, one short line","value":"value if known else blank","date":"when if known else blank","source":"url if any else blank"}],"catalysts":[{"point":"trigger with logic, one short line","source":"url if any else blank"}],"risks":[{"point":"risk, one short line","source":"url if any else blank"}]}',
     "",
     "SECTOR TAILWIND RULE (VERY IMPORTANT):",
     "- sector.name = the sector this stock belongs to (e.g. Capital Goods, Chemicals, IT Services, Power, Defense, Textiles).",
@@ -2364,6 +2364,24 @@ const buildAiResearchPrompt = (d) => {
 };
 
 // Pull clean JSON out of ChatGPT's reply (handles ``` fences and trailing prose).
+function normalizeCompanyName(s) {
+  return String(s || "")
+    .toLowerCase()
+    .replace(/\./g, " ")
+    .replace(/[^a-z0-9 ]/g, "")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+// True when the reply's own "company" field matches the row's company. Guards
+// against stale/previous-row answers ever reaching the sheet.
+function replyMatchesCompany(parsed, expectedName) {
+  if (!parsed || !expectedName) return !!(parsed && parsed.company);
+  const got = normalizeCompanyName(parsed.company);
+  const want = normalizeCompanyName(expectedName);
+  if (!got || !want) return true; // no company tag — let JSON validity decide
+  return got.includes(want) || want.includes(got);
+}
 function extractAiJson(text) {
   const clean = (s) =>
     s
@@ -2702,6 +2720,12 @@ async function runAiResearch(spreadsheetId, tabName, mode, maxRows, onProgress, 
     if (!parsed) {
       const snippet = String(text || "").replace(/\s+/g, " ").slice(0, 180);
       return { failed: true, error: `AI reply did not contain valid JSON — will retry. Reply: ${snippet || "(empty)"}` };
+    }
+    if (!replyMatchesCompany(parsed, t.name)) {
+      return {
+        failed: true,
+        error: `AI replied about "${parsed.company || '???'}" — expects "${t.name}". Stale/prev-row answer, treating as failed (no sheet write).`,
+      };
     }
     const cells = aiRowCells(parsed);
     // Append mode: never clobber an existing AI cell — only the missing ones
